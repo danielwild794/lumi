@@ -1252,6 +1252,32 @@ function idleLife(now) {
   else if (pickB === 'smirk') react('smug', 2200);
 }
 
+/* ================= her own initiative ================= */
+/* When it's been quiet for a while she gets a private moment to act on her own: say something, doodle,
+   look around, tease you, or stay quiet. The gaps grow if you don't answer, and after three she dozes off. */
+const auto = { nextThought: 0, unanswered: 0 };
+function scheduleThought(now) { auto.nextThought = now + rnd(32000, 70000) * (1 + auto.unanswered * .7); }
+function autonomyTick(now) {
+  if (!voice.connected || !voice.conv) { auto.nextThought = 0; auto.unanswered = 0; return; }
+  if (st.speaking || st.thinking || voice.inLevel > .08) return;
+  const quietFor = now - Math.max(voice.lastHeard || 0, voice.lastSpoke || 0, voice.connectedAt || 0, lastAutoTurn);
+  if (quietFor < 8000) return;
+  if (!auto.nextThought) { scheduleThought(now); return; }
+  if (now < auto.nextThought) return;
+  if (auto.unanswered >= 3) {
+    auto.nextThought = now + 1e9;
+    applyFace({ mood: 'sleepy' });
+    senseNote('[note] They haven\'t said anything in a long while, so you\'re dozing off. Wake up properly if they talk to you.');
+    return;
+  }
+  const bits = [`nobody has said anything for about ${Math.round(quietFor / 1000)} seconds`];
+  if (cam.on) bits.push(cam.present ? 'you can see them in front of the camera' : 'you can\'t see them right now');
+  const things = Object.keys(cam.inView || {}); if (things.length) bits.push('in view: ' + things.join(', '));
+  const hour = new Date().getHours(); if (hour >= 23 || hour < 6) bits.push('it\'s late at night for them');
+  auto.unanswered++; scheduleThought(now); dbg.thoughts = (dbg.thoughts || 0) + 1;
+  senseTurn('[thought] A quiet moment to yourself (' + bits.join('; ') + '). Do something only if you genuinely feel like it, keep it short and different from last time. Otherwise skip your turn and stay quiet.', true);
+}
+
 /* ================= the face call (from her brain, or the Face Lab) ================= */
 let lastFaceCall = 0;
 function applyFace(p = {}) {
@@ -1324,11 +1350,12 @@ async function wake() {
         draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
         remember: params => { dbg.remember++; addMemory(params && params.fact); }
       },
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); setTimeout(sendSessionNote, 400); },
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; setTimeout(sendSessionNote, 400); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDisconnect: d => onVoiceEnd(d),
       onError: (msg) => { console.warn('voice error', msg); if (msg) showToast(String(msg).slice(0, 140)); },
       onModeChange: ({ mode }) => {
+        if (voice.mode === 'speaking' && mode !== 'speaking') voice.lastSpoke = performance.now();
         voice.mode = mode; st.speaking = mode === 'speaking';
         if (st.speaking) st.thinking = false;
         setState(st.speaking ? 'TALKING' : (st.thinking ? 'THINKING' : 'LISTENING'));
@@ -1424,6 +1451,8 @@ function onVoiceMessage(msg) {
     if (performance.now() - lastFaceCall > 2600) guessMood(msg.message);
   } else {
     st.thinking = true; st.thinkingSince = performance.now(); setState('THINKING');
+    voice.lastHeard = performance.now(); auto.unanswered = 0; auto.nextThought = 0;
+    if (LOOK_WORDS.test(msg.message)) startEarlyPic();
     if (/\blumi\b/i.test(msg.message)) bump(.6);
   }
 }
@@ -1446,7 +1475,7 @@ function sampleVoice() {
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
   try { voice.inLevel = voice.muted ? 0 : clamp(c.getInputVolume() || 0, 0, 1); } catch (e) {}
   const now = performance.now();
-  if (voice.inLevel > .12) poke();
+  if (voice.inLevel > .12) { poke(); voice.lastHeard = now; auto.unanswered = 0; }
   // how you sound: shouting makes her flinch, whispering makes her lean in
   if (!st.speaking && S.react) {
     voice.loudN = voice.inLevel > .85 ? (voice.loudN || 0) + 1 : 0;
@@ -1478,12 +1507,21 @@ function sampleVoice() {
 /* ================= eyes (camera + on-device face/hand tracking) ================= */
 const cam = { on: false, loading: false, stream: null, video: $('#cam'), lm: null, gr: null, lastDet: 0, lastGest: 0,
   present: false, seenAt: 0, lostAt: 0, baseWidth: 0, smileT: 0, yawnT: 0, leanT: 0, stareT: 0, wasAway: false, awayNoted: false, dimmed: false,
-  wrist: [], gesture: '', gestT: 0, cool: {} };
+  wrist: [], gesture: '', gestT: 0, cool: {},
+  od: null, lastObj: 0, objRun: {}, objNoted: {}, inView: {}, baselineUntil: 0, baselineDone: false, pendingNew: [], pendingT: 0, crowdT: 0, early: null };
 function cooled(key, ms) { const n = performance.now(); if ((cam.cool[key] || 0) > n) return false; cam.cool[key] = n + ms; return true; }
 function senseNote(text) { if (voice.connected && voice.conv) try { voice.conv.sendContextualUpdate(text); } catch (e) {} }
 function eyesNote(text) { senseNote('[eyes] ' + text); }
-/* a few moments are worth her answering right away (head pats, being shaken): sent as a turn, never while she talks */
-function senseTurn(text) { if (voice.connected && voice.conv && !st.speaking) try { voice.conv.sendUserMessage(text); } catch (e) {} else senseNote(text); }
+/* moments worth her speaking up about on her own. Only when the room is quiet (she isn't talking,
+   you aren't talking), and never more than one every 12 seconds; otherwise it's a silent note. */
+let lastAutoTurn = 0;
+function senseTurn(text, force) {
+  const now = performance.now();
+  const quiet = !st.speaking && !st.thinking && voice.inLevel < .1 && now - (voice.lastHeard || 0) > 1500;
+  if (voice.connected && voice.conv && quiet && (force || now - lastAutoTurn > 12000)) { lastAutoTurn = now; try { voice.conv.sendUserMessage(text); } catch (e) {} }
+  else senseNote(text);
+}
+function eyesTurn(text) { senseTurn('[eyes] ' + text); }
 
 async function startEyes() {
   if (cam.on || cam.loading) return;
@@ -1503,6 +1541,10 @@ async function startEyes() {
     };
     cam.lm = await make(vision.FaceLandmarker, { baseOptions: { modelAssetPath: FACE_MODEL }, runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true });
     try { cam.gr = await make(vision.GestureRecognizer, { baseOptions: { modelAssetPath: HAND_MODEL }, runningMode: 'VIDEO', numHands: 1 }); } catch (e) { console.warn('hand tracking unavailable', e); }
+    try {
+      cam.od = await make(vision.ObjectDetector, { baseOptions: { modelAssetPath: OBJ_MODEL }, runningMode: 'VIDEO', scoreThreshold: .5, maxResults: 6, categoryDenylist: OBJ_SKIP });
+      cam.baselineUntil = performance.now() + 3500; cam.baselineDone = false; cam.objRun = {}; cam.objNoted = {}; cam.inView = {};
+    } catch (e) { console.warn('object spotting unavailable', e); }
     showToast('She can see you now.');
     eyesNote('Your eyes just opened: their camera is on and you can see them now.');
   } catch (e) {
@@ -1514,8 +1556,8 @@ async function startEyes() {
 function stopEyes(silent) {
   if (cam.stream) cam.stream.getTracks().forEach(t => t.stop());
   cam.stream = null; cam.on = false; cam.present = false; st.trackGaze = null;
-  try { cam.lm && cam.lm.close(); cam.gr && cam.gr.close(); } catch (e) {}
-  cam.lm = cam.gr = null; $('#peek').hidden = true;
+  try { cam.lm && cam.lm.close(); cam.gr && cam.gr.close(); cam.od && cam.od.close(); } catch (e) {}
+  cam.lm = cam.gr = cam.od = null; cam.inView = {}; cam.early = null; $('#peek').hidden = true;
   if (!silent) { applyFace({ mood: 'sleepy' }); setTimeout(() => applyFace({ mood: 'chill' }), 900); eyesNote('Your camera is off now, you can\'t see them anymore.'); }
   renderPanel();
 }
@@ -1537,11 +1579,11 @@ function trackEyes(now) {
         // peekaboo
         react('shook', 650, { screen: 'static' }); bump(1.3);
         setTimeout(() => react('happy', 1900, { fx: 'sparkles' }), 650);
-        eyesNote('they hid their face and popped back out, peekaboo');
+        eyesTurn('they hid their face and popped back out, peekaboo');
       } else if (cam.wasAway && away > 5 && reactOn) {
         scr.noSignal = false;
         react('happy', 2600, { screen: away > 18 ? 'static' : 'flash' }); bump(1.2);
-        eyesNote(`they came back after about ${Math.round(away)} seconds away`);
+        (away > 20 ? eyesTurn : eyesNote)(`they came back after about ${Math.round(away)} seconds away`);
       }
       cam.wasAway = false; cam.awayNoted = false; cam.dimmed = false;
     }
@@ -1568,7 +1610,7 @@ function trackEyes(now) {
       // you look down → she gets concerned
       const frown = (blend(cats, 'mouthFrownLeft') + blend(cats, 'mouthFrownRight')) / 2;
       cam.frownT = frown > .4 && smile < .2 ? (cam.frownT || 0) + 1 : 0;
-      if (cam.frownT === 22 && cooled('frown', 60000)) { react('sad', 2400); eyesNote('they look a little down right now'); }
+      if (cam.frownT === 22 && cooled('frown', 180000)) { react('sad', 2400); eyesTurn('they look a little down right now'); }
       // surprise
       if (jaw > .35 && browUp > .55 && wide > .35 && !talkingYou && cooled('surprise', 8000)) { react('shook', 1500, { screen: 'static' }); eyesNote('they look surprised'); }
       // yawn
@@ -1606,34 +1648,46 @@ function trackEyes(now) {
     if (name === 'Open_Palm' && cam.wrist.length > 5) {
       let flips = 0, dir = 0, lo = 1, hi = 0;
       for (let i = 1; i < cam.wrist.length; i++) { const d = cam.wrist[i][1] - cam.wrist[i - 1][1]; const s = Math.sign(d); if (Math.abs(d) > .008) { if (dir && s !== dir) flips++; dir = s; } lo = Math.min(lo, cam.wrist[i][1]); hi = Math.max(hi, cam.wrist[i][1]); }
-      if (flips >= 2 && hi - lo > .05 && cooled('wave', 12000)) { react('happy', 2800, { screen: 'flash', fx: 'sparkles' }); bump(1.2); eyesNote('they\'re waving at you'); }
+      if (flips >= 2 && hi - lo > .05 && cooled('wave', 12000)) { react('happy', 2800, { screen: 'flash', fx: 'sparkles' }); bump(1.2); eyesTurn('they\'re waving at you'); }
     }
     if (cam.gestT === 3) {
       if (name === 'Thumb_Up' && cooled('thumbUp', 10000)) { react('starry', 2600, { fx: 'sparkles' }); eyesNote('they gave you a thumbs up'); }
       else if (name === 'Thumb_Down' && cooled('thumbDown', 10000)) { react('grumpy', 2600, { fx: 'anger' }); eyesNote('they gave you a thumbs down'); }
       else if (name === 'Victory' && cooled('peace', 10000)) { react('wink', 2400, { fx: 'twinkle' }); eyesNote('they threw up a peace sign'); }
-      else if (name === 'ILoveYou' && cooled('love', 15000)) { react('smitten', 3200); effect('hearts'); st.blushBoost = 1; eyesNote('they made the love-you hand sign at you'); }
+      else if (name === 'ILoveYou' && cooled('love', 15000)) { react('smitten', 3200); effect('hearts'); st.blushBoost = 1; eyesTurn('they made the love-you hand sign at you'); }
       else if (name === 'Pointing_Up' && cooled('point', 12000)) { react('curious', 2000, { fx: 'question' }); }
     }
   }
 }
 
+/* photos are small and light so they upload fast on phone data, still plenty for her to see details */
 function snapshot() {
   return new Promise((res, rej) => {
     const v = cam.video; if (!cam.on || v.readyState < 2) return rej(new Error('camera off'));
-    const w = 640, h = Math.round(w * v.videoHeight / v.videoWidth) || 480;
+    const w = 512, h = Math.round(w * v.videoHeight / v.videoWidth) || 384;
     const c = document.createElement('canvas'); c.width = w; c.height = h;
     c.getContext('2d').drawImage(v, 0, 0, w, h);
-    c.toBlob(b => b ? res(b) : rej(new Error('snapshot failed')), 'image/jpeg', .82);
+    c.toBlob(b => b ? res(b) : rej(new Error('snapshot failed')), 'image/jpeg', .74);
   });
 }
-async function sendPicture(text) {
+function uploadNow() {
+  const c = voice.conv; if (!c) return Promise.reject(new Error('not connected'));
+  return snapshot().then(b => c.uploadFile(b)).then(r => r.fileId);
+}
+/* grab the photo the moment you say "look"/"check this out", while she's still deciding to look */
+const LOOK_WORDS = /\b(look|looking|see|seeing|watch|check (this|it|that) out|show(ing)? you|what('?s| is) (this|that)|how do i look|what do you think of|can you see|my (outfit|shirt|hair|face|room|cat|dog|new))\b/i;
+function startEarlyPic() {
+  const now = performance.now();
+  if (!cam.on || !voice.conv || (cam.early && now - cam.early.t < 4000)) return;
+  const p = uploadNow(); p.catch(() => {});
+  cam.early = { t: now, p };
+}
+async function sendPicture(text, pending) {
   const c = voice.conv; if (!c) return;
   scr.flashA = .45; screenCue('zoom_in');
   try {
-    const blob = await snapshot();
-    const up = await c.uploadFile(blob);
-    c.sendMultimodalMessage({ text, fileIds: [up.fileId] });
+    const fileId = await (pending || uploadNow());
+    c.sendMultimodalMessage({ text, fileIds: [fileId] });
     dbg.pics++;
   } catch (e) {
     console.warn('picture failed', e); dbg.picErr = String(e && e.message || e);
@@ -1644,7 +1698,62 @@ function doLook() {
   if (!voice.conv) return;
   if (!cam.on) { try { voice.conv.sendUserMessage('[eyes] Their camera is off, so you can\'t see anything right now.'); } catch (e) {} applyFace({ mood: 'curious', screen: 'no_signal' }); return; }
   react('curious', 1600);
-  sendPicture('[eyes] This is what you see through their camera right now.');
+  const e = cam.early && performance.now() - cam.early.t < 9000 ? cam.early : null;
+  cam.early = null; dbg.early = (dbg.early || 0) + (e ? 1 : 0);
+  sendPicture('[eyes] This is what you see through their camera right now.', e && e.p);
+}
+
+/* she notices things on her own: an on-device detector spots everyday objects, no photo needed */
+const OBJ_MODEL = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+const OBJ_SKIP = ['chair', 'couch', 'bed', 'dining table', 'tv', 'refrigerator', 'oven', 'sink', 'toilet', 'microwave', 'bench', 'toaster', 'potted plant', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter'];
+const OBJ_NAME = { 'cell phone': 'phone', 'sports ball': 'ball', 'teddy bear': 'teddy bear', 'wine glass': 'wine glass', 'hair drier': 'hair dryer' };
+const CUTE = new Set(['cat', 'dog', 'bird', 'teddy bear', 'horse', 'sheep', 'cow', 'bear', 'elephant', 'zebra', 'giraffe']);
+const FOOD = new Set(['pizza', 'donut', 'cake', 'banana', 'apple', 'sandwich', 'hot dog', 'orange', 'broccoli', 'carrot']);
+function trackObjects(now) {
+  if (!cam.on || !cam.od || cam.video.readyState < 2 || now - cam.lastObj < 700) return;
+  cam.lastObj = now;
+  let res; try { res = cam.od.detectForVideo(cam.video, now); } catch (e) { return; }
+  const vw = cam.video.videoWidth || 640, vh = cam.video.videoHeight || 480;
+  const seen = {}; let people = 0;
+  for (const d of (res && res.detections) || []) {
+    const c = d.categories && d.categories[0]; if (!c) continue;
+    const name = OBJ_NAME[c.categoryName] || c.categoryName;
+    if (name === 'person') { people++; continue; }
+    const b = d.boundingBox; seen[name] = b ? [(b.originX + b.width / 2) / vw, (b.originY + b.height / 2) / vh] : [.5, .5];
+  }
+  for (const k in cam.objRun) if (!seen[k]) cam.objRun[k] = 0;
+  for (const k in seen) cam.objRun[k] = (cam.objRun[k] || 0) + 1;
+  cam.inView = {}; for (const k in seen) if (cam.objRun[k] >= 2) cam.inView[k] = seen[k];
+  // whatever is already around when her eyes open is the room, she takes it in once
+  if (!cam.baselineDone) {
+    if (now < cam.baselineUntil) return;
+    cam.baselineDone = true;
+    const room = Object.keys(cam.inView);
+    room.forEach(k => cam.objNoted[k] = now);
+    if (room.length) eyesNote('around them right now you can see: ' + room.join(', '));
+    return;
+  }
+  if (!S.react) return;
+  // someone else shows up
+  cam.crowdT = people >= 2 ? cam.crowdT + 1 : 0;
+  if (cam.crowdT === 3 && cooled('crowd', 120000)) { react('shook', 900); setTimeout(() => react('curious', 1800), 900); eyesTurn('someone else just showed up next to them'); }
+  // something new comes into view
+  for (const k in cam.inView) {
+    if (cam.objRun[k] !== 3) continue;
+    if (cam.objNoted[k] && now - cam.objNoted[k] < 120000) continue;
+    cam.objNoted[k] = now; cam.pendingNew.push(k); cam.pendingT = cam.pendingT || now;
+    const [ox, oy] = cam.inView[k];
+    st.tgx = clamp(-(ox - .5) * 2.4, -1, 1); st.tgy = clamp((oy - .45) * 2.2, -1, 1); st.nextLook = now + 1400;
+    if (CUTE.has(k)) { react('smitten', 2600); effect('hearts'); }
+    else if (FOOD.has(k)) react('hungry', 2400);
+    else react('curious', 1500, { fx: 'question' });
+  }
+  if (cam.pendingNew.length && now - cam.pendingT > 1200) {
+    const list = cam.pendingNew.splice(0); cam.pendingT = 0;
+    const interesting = list.some(k => CUTE.has(k) || FOOD.has(k)) || cooled('newthing', 45000);
+    const txt = 'something new just came into view: ' + list.map(k => 'a ' + k).join(', ') + ' (that\'s all you know, take a look if you want details)';
+    interesting ? eyesTurn(txt) : eyesNote(txt);
+  }
 }
 
 /* ================= sounds (tiny, synthesized, never over your voice) ================= */
@@ -1922,6 +2031,8 @@ function frame(now) {
   const dt = Math.min(.05, Math.max(0, (now - last) / 1000)); last = now;
   sampleVoice();
   trackEyes(now);
+  trackObjects(now);
+  autonomyTick(now);
   update(now, dt);
   renderFace(now);
   composite(now);
@@ -1932,7 +2043,7 @@ syncLab(); renderPanel();
 if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
-  state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, face: cam.present, debug: dbg }),
+  state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap };
 requestAnimationFrame(frame);
 })();

@@ -972,7 +972,7 @@ function spawnMG(type, secs, manual) {
 function moodBeat(id) {
   { // her glow is white most of the time; a big feeling sometimes tints it for a few seconds, a mild one only rarely
     const now0 = performance.now(), hue = MOOD_HUE[id], big = FLASHY.has(id);
-    if (hue && now0 - tint.lastAuto > 8000 && Math.random() < (big ? .4 : .1)) { tint.moodHex = hue; tint.moodUntil = now0 + rnd(3500, 6500); tint.lastAuto = now0; tint.flash = big ? 1 : .35; }
+    if (hue && now0 - tint.lastAuto > 6000 && Math.random() < (big ? .6 : .22)) { tint.moodHex = hue; tint.moodUntil = now0 + rnd(5000, 8500); tint.lastAuto = now0; tint.flash = big ? 1 : .5; }
     else if (tint.moodUntil && tint.moodHex !== hue) tint.moodUntil = 0;   // a new feeling: the old color fades out
   }
   const d = MOOD_MG[id], now = performance.now();

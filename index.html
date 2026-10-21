@@ -251,6 +251,7 @@ const easeIn = p => p * p;
 const backOut = p => { const c = 1.70158; return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2); };
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
+function wpick(list) { const tot = list.reduce((s2, x) => s2 + Math.max(0, x[0]), 0); let r = Math.random() * tot; for (const [w, v] of list) { r -= Math.max(0, w); if (r <= 0) return v; } return list[list.length - 1][1]; }
 
 const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
@@ -317,6 +318,30 @@ const st = {
   cust: { eyeL: null, eyeR: null, browL: null, browR: null, mouth: null, extras: null }
 };
 
+/* variety: some moods have several mouths (and eyes) and pick a fresh one each time she goes
+   into them, never the same as last time, so happy isn't always the :3 */
+const VARIANTS = {
+  happy:   { mouth: [[3, 'smile'], [3, 'grin'], [1, 'cat'], [1.2, 'open'], [1.4, 'blep']], eye: [[3, 'arc'], [1.3, 'almond']] },
+  wink:    { mouth: [[2, 'smirk'], [2, 'smile'], [.8, 'cat'], [1.4, 'blep'], [1, 'grin']] },
+  chill:   { mouth: [[3, 'smile'], [1, 'hmm'], [.8, 'flat'], [.7, 'smirk']] },
+  smitten: { mouth: [[2, 'smile'], [1, 'o'], [1, 'grin'], [.6, 'wavy']] },
+  starry:  { mouth: [[2, 'grin'], [2, 'open'], [1, 'smile'], [.8, 'o']] },
+  smug:    { mouth: [[4, 'smirk'], [.8, 'blep'], [.6, 'hmm']] },
+  curious: { mouth: [[3, 'hmm'], [1.5, 'o'], [1, 'smirk']] },
+  hungry:  { mouth: [[3, 'open'], [1.2, 'blep'], [1, 'o']] }
+};
+const varPick = {};
+function reroll(id) {
+  const V = VARIANTS[id]; if (!V) return;
+  const prev = varPick[id] || {}, next = {};
+  for (const part in V) {
+    const pool = V[part].length > 2 ? V[part].filter(x => x[1] !== prev[part]) : V[part];
+    next[part] = wpick(pool.length ? pool : V[part]);
+  }
+  varPick[id] = next;
+}
+const varOf = (m, part) => (varPick[m.id] && varPick[m.id][part]) || m[part];
+
 /* combine base mood + blended mood + dials into one target face */
 function composeTarget() { return buildFace(st.base, st.mix, st.mixK, st.dials); }
 function buildFace(A, B, kIn, D) {
@@ -324,8 +349,8 @@ function buildFace(A, B, kIn, D) {
   const dom = k > .5 ? B : A;
   const num = (key, def) => lerp(A[key] ?? def, B ? (B[key] ?? def) : (A[key] ?? def), k);
   const t = {
-    id: A.id + (B && k > 0 ? '+' + B.id : ''), name: B && k > .02 ? A.name + ' + ' + B.name : A.name,
-    eye: dom.eye, eyeR: dom.eyeR || null, mouth: dom.mouth, pupilType: dom.pupilType || null, fx: A.fx,
+    id: A.id + (B && k > 0 ? '+' + B.id : '') + (VARIANTS[dom.id] ? '/' + varOf(dom, 'mouth') + '.' + varOf(dom, 'eye') : ''), name: B && k > .02 ? A.name + ' + ' + B.name : A.name,
+    eye: varOf(dom, 'eye'), eyeR: dom.eyeR || null, mouth: varOf(dom, 'mouth'), pupilType: dom.pupilType || null, fx: A.fx,
     open: num('open', 1) * D.open, lid: num('lid', 0), tilt: num('tilt', 0), pupil: num('pupil', 1),
     blush: num('blush', 0), head: num('head', 0) + D.tilt * .08, wander: num('wander', 1),
     gaze: [lerp((A.gaze || [0, 0])[0], B ? (B.gaze || [0, 0])[0] : (A.gaze || [0, 0])[0], k), lerp((A.gaze || [0, 0])[1], B ? (B.gaze || [0, 0])[1] : (A.gaze || [0, 0])[1], k)],
@@ -654,6 +679,11 @@ function drawMouth(m, t) {
       grin(5.8, -1, 7.4);
       for (const fx of [-1, 1]) { ctx.beginPath(); ctx.moveTo(fx * 3.7, -1); ctx.lineTo(fx * 2.7, -1); ctx.lineTo(fx * 3.1, 1.2); ctx.closePath(); ctx.fill(); }
       break;
+    case 'blep': {
+      brush(qpts(-5.4, -.6, 0, 2.6, 5.4, -.6, 20), taperMid(.6, .04));
+      brush(qpts(.2, 1.05, 1.5, 5.4, 3.1, .55, 14), taperMid(.5, .06));
+      break;
+    }
     case 'frown': brush(qpts(-5, 1.8, 0, -1.4, 5, 1.8, 18), taperMid(.6, .04)); break;
     case 'pout': brush(qpts(-3.2, 1.7, 0, -.7, 3.2, 1.7, 14), taperMid(.6, .04)); break;
     case 'wail': { const w = reduceMQ.matches ? 0 : Math.sin(t * 14) * .5; lens(4.2 + w * .3, 1 + w * .3, 4.6 + w); break; }
@@ -920,8 +950,18 @@ function resample(P, step) {
 function makePart(d, kind) {
   if (!d || typeof d !== 'string') return null;
   const [k, w] = PART[kind], polys = parsePath(d), out = []; let len = 0;
+  // eyes, brows and mouths snap to their spot even if she drew them off-centre in the box,
+  // and a part drawn too tiny to read gets nudged up (a single dot stays a dot)
+  let cx = 50, cy = 50, fix = 1;
+  if (kind !== 'extras' && polys.length) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of polys) for (const [x, y] of p) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    cx = (x0 + x1) / 2; cy = (y0 + y1) / 2;
+    const span = Math.max(x1 - x0, y1 - y0), min = { eye: 26, brow: 40, mouth: 26 }[kind];
+    if (span > 3 && span < min) fix = min / span;
+  }
   for (const p of polys) {
-    const q = p.map(([x, y]) => [(clamp(x, -60, 160) - 50) * k, (clamp(y, -60, 160) - 50) * k]);
+    const q = p.map(([x, y]) => [(clamp(x, -60, 160) - cx) * k * fix, (clamp(y, -60, 160) - cy) * k * fix]);
     let pts = resample(q, .42), l = 0;
     for (let i = 1; i < pts.length; i++) l += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
     if (l < .3) { // a dot: give it a tiny loop so it shows
@@ -1325,13 +1365,15 @@ function blinkNow() { if (st.blinkStart < 0) st.blinkStart = performance.now(); 
 /* overlays are short local reactions (from your face, from her listening); her own face calls clear them */
 function reactMix(a, b, k, dials, ms) {
   const A = MOOD_BY[a]; if (!A) return;
+  reroll(a); if (b) reroll(b);
   const t = buildFace(A, MOOD_BY[b] || null, k, Object.assign(blankDials(), dials || {}));
   t.id = 'r:' + t.id + ':' + Math.round(k * 10);
   st.ovr = { m: t, until: performance.now() + ms };
 }
 function react(moodId, ms, opts = {}) {
   const m = MOOD_BY[moodId]; if (!m) return;
-  const t = Object.assign({}, m, { brows: { L: m.brows.L.slice(), R: m.brows.R.slice() } });
+  reroll(moodId);
+  const t = Object.assign({}, m, { eye: varOf(m, 'eye'), mouth: varOf(m, 'mouth'), brows: { L: m.brows.L.slice(), R: m.brows.R.slice() } });
   st.ovr = { m: t, until: performance.now() + ms };
   if (opts.fx) spawnFx(opts.fx);
   if (opts.screen) screenCue(opts.screen);
@@ -1478,9 +1520,9 @@ function applyFace(p = {}) {
   if (scr.power === 'off' || scr.power === 'turningOff') { if (p.screen !== 'power_off') powerOn(); }
   if (p.screen !== 'no_signal') scr.noSignal = false;
   const moodId = String(p.mood || '').toLowerCase();
-  if (MOOD_BY[moodId]) st.base = MOOD_BY[moodId];
+  if (MOOD_BY[moodId]) { reroll(moodId); st.base = MOOD_BY[moodId]; }
   const bw = String(p.blend_with || '').toLowerCase();
-  if (MOOD_BY[bw] && bw !== st.base.id) { st.mix = MOOD_BY[bw]; st.mixK = clamp(isFinite(+p.blend) && p.blend !== undefined && p.blend !== null && p.blend !== '' ? +p.blend : .4, 0, 1); }
+  if (MOOD_BY[bw] && bw !== st.base.id) { reroll(bw); st.mix = MOOD_BY[bw]; st.mixK = clamp(isFinite(+p.blend) && p.blend !== undefined && p.blend !== null && p.blend !== '' ? +p.blend : .4, 0, 1); }
   else if (MOOD_BY[moodId]) { st.mix = null; st.mixK = 0; }
   const D = st.dials;
   const num = (v, a, b, d) => (v === undefined || v === null || v === '' || !isFinite(+v)) ? d : clamp(+v, a, b);
@@ -1525,7 +1567,7 @@ async function wake() {
   if (ENV.artifact) {
     showToast('She can only talk in the downloaded Lumi Live file, opened in Chrome on your computer. Her face works here.');
     applyFace({ mood: 'shook', screen: 'static' });
-    setTimeout(() => applyFace({ mood: 'happy' }), 700);
+    setTimeout(() => applyFace({ mood: pick(['curious', 'smug', 'wink', 'happy']) }), 700);
     return;
   }
   applyFace({ mood: 'shook', screen: 'static' });
@@ -1546,7 +1588,7 @@ async function wake() {
         sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); }
       },
       onAudioAlignment: a => onAlign(a),
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDisconnect: d => onVoiceEnd(d),
       onError: (msg) => { console.warn('voice error', msg); if (msg) showToast(String(msg).slice(0, 140)); },
@@ -1658,13 +1700,13 @@ function onVoiceMessage(msg) {
 function guessMood(text) {
   const t = text.toLowerCase();
   let m = null;
-  if (/\b(haha|hehe|lol|lmao)\b/.test(t)) m = 'happy';
+  if (/\b(haha|hehe|lol|lmao)\b/.test(t)) m = wpick([[1, 'happy'], [1, 'wink'], [.8, 'smug'], [.6, 'flustered']]);
   else if (/\b(ugh|seriously|really\?)\b/.test(t)) m = 'unimpressed';
   else if (/\b(wait|what\?|whoa|no way)\b/.test(t)) m = 'shook';
   else if (/\b(aw+|sorry|oh no)\b/.test(t)) m = 'sad';
   else if (/\b(hmm+|let me think|i wonder)\b/.test(t)) m = 'thinking';
   else if (/\?\s*$/.test(t)) m = 'curious';
-  else if (/!/.test(t)) m = 'happy';
+  else if (/!/.test(t)) m = wpick([[1, 'starry'], [1, 'smug'], [.8, 'happy'], [.6, 'shook'], [.6, 'wink']]);
   if (m && m !== st.base.id) applyFace({ mood: m });
 }
 
@@ -1780,11 +1822,11 @@ function trackEyes(now) {
       if (reactOn && away > .7 && away < 4 && cooled('peek', 15000)) {
         // peekaboo
         react('shook', 650, { screen: 'static' }); bump(1.3);
-        setTimeout(() => react('happy', 1900, { fx: 'sparkles' }), 650);
+        setTimeout(() => react(pick(['happy', 'wink', 'starry', 'smug']), 1900, { fx: pick(['sparkles', 'twinkle', 'exclaim']) }), 650);
         eyesTurn('they hid their face and popped back out, peekaboo');
       } else if (cam.wasAway && away > 5 && reactOn) {
         scr.noSignal = false;
-        react('happy', 2600, { screen: away > 18 ? 'static' : 'flash' }); bump(1.2);
+        react(pick(['happy', 'starry', 'smug', 'curious', 'wink']), 2600, { screen: away > 18 ? 'static' : 'flash' }); bump(1.2);
         (away > 20 ? eyesTurn : eyesNote)(`they came back after about ${Math.round(away)} seconds away`);
       }
       cam.wasAway = false; cam.awayNoted = false; cam.dimmed = false;
@@ -2008,16 +2050,16 @@ function heartTick(now) {
   heart.annoy = Math.max(0, heart.annoy - dt * .035); heart.excite = Math.max(0, heart.excite - dt * .09);
 }
 const chance = p => Math.random() < p;
-function wpick(list) { const tot = list.reduce((s2, x) => s2 + Math.max(0, x[0]), 0); let r = Math.random() * tot; for (const [w, v] of list) { r -= Math.max(0, w); if (r <= 0) return v; } return list[list.length - 1][1]; }
+
 const FEEL = {
   eye:      { d: { annoy: .22, excite: .1 }, pool: H => [[1 + H.annoy * 2, ['grumpy', 'shook']], [1.2 - H.annoy, ['flustered', 'shook']], [.8, ['unimpressed', 'grumpy']], [.6 * H.affection, ['wink', 'flustered']]], fx: ['anger', 'sweat', 'exclaim'], pops: ['HEY!', 'OW', 'RUDE', 'MY EYE', '!!'], popP: .4, blink: true, bump: .6, screen: [['glitch', .15]], say: 'poked you in the eye' },
-  cheek:    { d: { affection: .015, excite: .12 }, pool: H => [[1 + H.affection, ['flustered', 'smitten']], [.8, ['smitten', 'happy']], [.5 + H.annoy * 2, ['unimpressed', 'smug']], [.5, ['shook', 'flustered']]], fx: ['blush', 'blush', 'sweat', 'hearts'], pops: ['EEP', 'HM?', 'BOOP'], popP: .25, squish: true, bump: .4, say: 'poked your cheek' },
+  cheek:    { d: { affection: .015, excite: .12 }, pool: H => [[1 + H.affection, ['flustered', 'smitten']], [.8, ['smitten', 'wink']], [.5 + H.annoy * 2, ['unimpressed', 'smug']], [.5, ['shook', 'flustered']]], fx: ['blush', 'blush', 'sweat', 'hearts'], pops: ['EEP', 'HM?', 'BOOP'], popP: .25, squish: true, bump: .4, say: 'poked your cheek' },
   mouth:    { d: { excite: .15 }, pool: H => [[1, ['shook', 'happy']], [.8, ['curious', 'shook']], [.6, ['smug', 'wink']], [.3 + H.annoy, ['grumpy', 'shook']]], fx: ['exclaim', 'sparkles'], pops: ['BOOP', 'HM!', '?!'], popP: .3, bump: .7, say: 'booped your mouth' },
   headtap:  { d: { affection: .01 }, pool: H => [[1, ['curious', 'happy']], [.7, ['smug', 'curious']], [.4 + H.annoy, ['unimpressed', 'curious']]], bump: .5, say: 'tapped your head' },
   pat:      { d: { affection: .05, annoy: -.15 }, pool: H => [[1 + H.affection, ['happy', 'smitten']], [.8, ['smitten', 'sleepy']], [.6, ['happy', 'flustered']], [H.annoy * 2, ['unimpressed', 'happy']]], fx: ['hearts', 'hearts', 'sparkles', 'music'], pops: ['HEHE', 'MORE', 'PURR'], popP: .2, coo: true, blush: .8, dur: 1.4, say: 'patted your head' },
   rubhead:  { d: { affection: .05, annoy: -.2 }, pool: H => [[1, ['happy', 'sleepy']], [1 + H.affection, ['smitten', 'sleepy']], [.6, ['happy', 'flustered']]], fx: ['hearts', 'music', 'sparkles'], pops: ['MMM', 'PURR', 'HEHE'], popP: .25, coo: true, blush: .8, dur: 1.6, say: 'rubbed your head' },
   rubcheek: { d: { affection: .04, excite: .1 }, pool: H => [[1, ['flustered', 'smitten']], [.7, ['happy', 'flustered']], [.5, ['sleepy', 'smitten']], [H.annoy * 2, ['grumpy', 'flustered']]], fx: ['blush', 'hearts'], pops: ['EHEHE', 'H-HEY', 'STOP IT'], popP: .3, blush: 1, coo: true, dur: 1.4, say: 'rubbed your cheek' },
-  tickle:   { d: { excite: .3, annoy: .04 }, pool: H => [[1, ['happy', 'flustered']], [.8, ['crying', 'happy']], [.6, ['wink', 'happy']], [H.annoy * 2, ['grumpy', 'happy']]], fx: ['sparkles', 'sweat', 'tears'], pops: ['HAHA', 'STOP', 'HEHE', 'NO-', 'PFFT'], popP: .65, bumps: 5, dur: 1.5, say: 'tickled you' },
+  tickle:   { d: { excite: .3, annoy: .04 }, pool: H => [[1, ['flustered', 'happy']], [.8, ['crying', 'happy']], [.6, ['wink', 'starry']], [.6, ['happy', 'dizzy']], [H.annoy * 2, ['grumpy', 'happy']]], fx: ['sparkles', 'sweat', 'tears'], pops: ['HAHA', 'STOP', 'HEHE', 'NO-', 'PFFT'], popP: .65, bumps: 5, dur: 1.5, say: 'tickled you' },
   pet:      { d: { affection: .06, annoy: -.2 }, pool: H => [[1, ['smitten', 'sleepy']], [.8, ['happy', 'smitten']], [.5, ['flustered', 'smitten']]], fx: ['hearts', 'hearts', 'music'], coo: true, blush: 1, dur: 1.6, say: 'rested a finger on your face, kind of petting you' },
   facetap:  { d: {}, pool: H => [[1, ['curious', 'happy']], [.5, ['shook', 'curious']], [.4, ['smug', 'curious']]], blink: true, bump: .5, say: 'tapped your face' },
   screen:   { d: {}, pool: H => [[1, ['curious', 'chill']], [.6, ['curious', 'smug']]], dur: .7 },
@@ -2030,8 +2072,8 @@ const FEEL = {
   spin:     { d: { excite: .2, annoy: .05 }, pool: H => [[1, ['dizzy', 'happy']], [.8, ['dizzy', 'shook']]], eye: 'spiral', pops: ['WHEEE', '@_@', 'NOOO'], popP: .35, dur: 1.4, say: 'spun the phone around' },
   flip:     { d: { annoy: .1 }, pool: H => [[1, ['dizzy', 'grumpy']], [.7, ['shook', 'dizzy']], [.4, ['dizzy', 'happy']]], pops: ['HELP', 'UPSIDE DOWN', 'BLEH'], popP: .4, dur: 1.6, say: 'flipped the phone upside down' },
   // things she sees through the camera
-  smiled:   { d: { affection: .01 }, pool: H => [[1, ['happy', 'smug']], [.7, ['wink', 'happy']], [.5 * H.affection, ['smitten', 'happy']], [H.annoy * 2, ['unimpressed', 'happy']]] },
-  waved:    { d: { excite: .15 }, pool: H => [[1, ['happy', 'starry']], [.6, ['wink', 'happy']]], fx: ['sparkles'], screen: [['flash', .6]], bump: 1.1 },
+  smiled:   { d: { affection: .01 }, pool: H => [[1, ['happy', 'smug']], [.8, ['chill', 'smitten']], [.7, ['wink', 'smug']], [.5, ['smug', 'flustered']], [.5 * H.affection, ['smitten', 'happy']], [H.annoy * 2, ['unimpressed', 'happy']]] },
+  waved:    { d: { excite: .15 }, pool: H => [[1, ['starry', 'happy']], [.8, ['happy', 'wink']], [.6, ['wink', 'smug']], [.5, ['curious', 'happy']]], fx: ['sparkles'], screen: [['flash', .6]], bump: 1.1 },
   thumbup:  { d: { affection: .01 }, pool: H => [[1, ['starry', 'smug']], [.7, ['happy', 'starry']]], fx: ['sparkles'] },
   thumbdown:{ d: { annoy: .1 }, pool: H => [[1, ['grumpy', 'shook']], [.7, ['unimpressed', 'sad']]], fx: ['anger'] },
   peace:    { pool: H => [[1, ['wink', 'happy']], [.6, ['smug', 'wink']]], fx: ['twinkle'] },
@@ -2345,7 +2387,7 @@ function hearMusic(now, c) {
     music.offSince = 0; music.beatMs = med; music.bpm = Math.round(60000 / med);
     if (!music.on) {
       music.on = true; music.nextBeat = music.lastOnset + med;
-      react('happy', 2200, { fx: 'music' });
+      react(pick(['happy', 'chill', 'wink', 'starry', 'smug']), 2200, { fx: 'music' });
       if (cooled('music', 180000)) {
         const feel = music.bpm > 140 ? 'fast and hype' : music.bpm > 110 ? 'upbeat' : music.bpm > 90 ? 'groovy, mid-tempo' : 'slow and chill';
         senseTurn(`[ears] there's music playing near them now, it sounds ${feel}`);

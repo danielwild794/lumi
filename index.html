@@ -437,7 +437,7 @@ function sideLash(base, oc, side, k = 1, w0 = 2.2, down = false) {
     : qpts(base[0], base[1], oc[0] + side * 1.6 * k, oc[1] - .1 * k, oc[0] + side * 4.2 * k, oc[1] - 1 * k, 12);
   brush(p, t => w0 * (1 - .82 * Math.pow(t, 1.5)));
 }
-const LASH = { root: .72, t1: [6.4, -4.0], t2: [7.2, -0.5], v: [2.5, -1.0], a1: 24, a2: 4, notchR: .35, ends: 1.0 };
+const LASH = { root: .72, t1: [9.6, -6.0], t2: [7.2, -0.5], v: [2.5, -1.0], a1: 24, a2: 4, notchR: .35, ends: 1.0 };
 const unit2 = v => { const l = Math.hypot(v[0], v[1]) || 1; return [v[0] / l, v[1] / l]; };
 /* the top lid splitting into two curved flicks at its outer end (her fishtail), one outline */
 function lidWing(pts, side, wf, k = 1) {

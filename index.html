@@ -650,9 +650,8 @@ function drawMouth(m, t) {
   { // her own invented mouth: stays on while she talks and stretches open with her voice
     const c = st.cust.mouth, now = performance.now(), v = custVis(c, now);
     if (v > 0) {
-      ctx.save();
-      if (talking) ctx.scale(1 + clamp(st.vw - 4.2, -2, 2.5) * .05, 1 + clamp(st.vh, 0, 6) * .17);
-      drawPart(c, v, now); ctx.restore();
+      if (talking) drawMouthTalk(c, v, now, clamp(st.vh, 0, 8) * .85, clamp(st.vw / 4.6, .78, 1.25));
+      else drawPart(c, v, now);
     }
     if (v > .995) { ctx.restore(); return; }
     ctx.globalAlpha *= 1 - v;
@@ -994,6 +993,35 @@ function drawPart(c, vis, now) {
     } else {
       const n = Math.max(2, Math.round((upto - used) / P.len * (P.pts.length - 1)) + 1);
       brush(P.pts.slice(0, n), tw); used = upto;
+    }
+  }
+  ctx.restore(); ctx.globalAlpha = A;
+}
+/* talking with a mouth she drew: her drawn line becomes the upper lip and a dropped copy becomes the
+   lower lip, joined at the corners, so it really opens like a jaw and still looks like her drawing.
+   Closed shapes (an o, a D grin) open taller instead; extra bits like a tongue ride down with the jaw. */
+function drawMouthTalk(c, vis, now, open, sx) {
+  const age = (now - c.t0) / 1000;
+  if (age < .5 || open < .12) { ctx.save(); ctx.scale(sx, 1 + open * .1); drawPart(c, vis, now); ctx.restore(); return; }
+  const A = ctx.globalAlpha; ctx.globalAlpha = A * vis;
+  ctx.save(); ctx.scale(sx, 1);
+  const tw = taperMid(c.w, c.w * .2), tl = taperMid(c.w * .85, c.w * .2);
+  let main = c.polys[0]; for (const P of c.polys) if (!P.closed && P.len > main.len) main = P;
+  const meanY = P => P.pts.reduce((s, p) => s + p[1], 0) / P.pts.length, mainY = meanY(main);
+  for (const P of c.polys) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of P.pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    const span = x1 - x0;
+    if (P === main && !P.closed && span > 2) {
+      const up = [], lo = [];
+      for (const [x, y] of P.pts) { const u = (x - x0) / span, b = Math.sin(Math.PI * u); up.push([x, y - open * .22 * b]); lo.push([x, y + open * Math.pow(b, .8)]); }
+      brush(up, tw); brush(lo, tl);
+    } else if (P.closed) {
+      const cy = (y0 + y1) / 2, below = cy > mainY + .5 && P !== main;
+      ctx.save(); ctx.translate(0, below ? open * .7 : 0); ctx.translate(0, cy); ctx.scale(1, 1 + open * .16); ctx.translate(0, -cy);
+      brushLoop(P.pts.slice(0, -1), () => c.w * .78); ctx.restore();
+    } else {
+      ctx.save(); ctx.translate(0, meanY(P) > mainY + .3 ? open * .75 : -open * .2); brush(P.pts, tw); ctx.restore();
     }
   }
   ctx.restore(); ctx.globalAlpha = A;

@@ -1542,10 +1542,11 @@ function idleLife(now) {
   if (scr.power !== 'on' || st.speaking || st.thinking || drawing || st.ovr || scr.noSignal) return;
   if (voice.inLevel > .08 || st.base.id === 'sleepy' || st.base.id === 'crying') return;
   if (now - lastActivity < 13000 || now - lastFaceCall < 9000 || now < nextIdle) return;
-  nextIdle = now + rnd(9000, 17000);
+  nextIdle = now + rnd(9000, 17000) * (needs.hype > .6 ? .6 : 1);
   const hour = new Date().getHours(), late = hour >= 23 || hour < 6;
   const beats = [
-    ['look', 3], ['hum', 2], ['blinks', 2], ['curious', 1], ['yawn', late ? 3 : .4], ['smirk', 1]
+    ['look', 3], ['hum', 2 * (needs.energy > .4 ? 1 : .3)], ['blinks', 2], ['curious', 1], ['yawn', (late ? 3 : .4) + (needs.energy < .35 ? 4 : 0)], ['smirk', 1],
+    ['sigh', needs.boredom * 4], ['sulk', needs.social < .35 ? 2.5 : 0], ['bounce', needs.hype > .6 ? 3 : 0]
   ];
   let tot = beats.reduce((s2, b) => s2 + b[1], 0), roll = Math.random() * tot, pickB = 'look';
   for (const [b, w] of beats) { roll -= w; if (roll <= 0) { pickB = b; break; } }
@@ -1555,6 +1556,9 @@ function idleLife(now) {
   else if (pickB === 'curious') react('curious', 2000, { fx: 'question' });
   else if (pickB === 'yawn') react('sleepy', 1700);
   else if (pickB === 'smirk') react('smug', 2200);
+  else if (pickB === 'sigh') { react(pick(['unimpressed', 'chill']), 2000); st.tgx = pick([-1, 1]); st.tgy = .5; st.nextLook = now + 1800; }
+  else if (pickB === 'sulk') { react('sad', 1700); setTimeout(() => { st.tgx = 0; st.tgy = 0; st.nextLook = performance.now() + 1500; }, 900); }
+  else if (pickB === 'bounce') { bump(.7); react(pick(['starry', 'smug', 'happy']), 1300); }
 }
 
 /* ================= her own initiative ================= */
@@ -1579,8 +1583,199 @@ function autonomyTick(now) {
   if (cam.on) bits.push(cam.present ? 'you can see them in front of the camera' : 'you can\'t see them right now');
   const things = Object.keys(cam.inView || {}); if (things.length) bits.push('in view: ' + things.join(', '));
   const hour = new Date().getHours(); if (hour >= 23 || hour < 6) bits.push('it\'s late at night for them');
+  bits.push('you feel ' + needWords());
   auto.unanswered++; scheduleThought(now); dbg.thoughts = (dbg.thoughts || 0) + 1;
   senseTurn('[thought] A quiet moment to yourself (' + bits.join('; ') + '). Do something only if you genuinely feel like it, keep it short and different from last time. Otherwise skip your turn and stay quiet.', true);
+}
+
+
+/* ================= her needs ================= */
+/* Energy, boredom, wanting attention and hype drift on their own, awake or asleep, and carry over between visits.
+   They tint what she does when nothing's happening, and when one gets strong her brain hears about it. */
+const NEEDS_KEY = 'lumi-live:needs';
+const needs = (() => {
+  let n = {}; try { n = JSON.parse(localStorage.getItem(NEEDS_KEY) || '{}') || {}; } catch (e) {}
+  n = Object.assign({ energy: .85, boredom: .25, social: .55, hype: .3, t: Date.now(), dreams: [], heard: [] }, n);
+  const hrs = Math.max(0, (Date.now() - (n.t || Date.now())) / 3600e3);   // time away counts as sleep
+  if (hrs > .05) {
+    n.energy = clamp(n.energy + hrs * .15, 0, 1); n.social = clamp(n.social - hrs * .06, .05, 1);
+    n.boredom = clamp(lerp(n.boredom, .4, Math.min(1, hrs / 4)), 0, 1); n.hype = clamp(lerp(n.hype, .2, Math.min(1, hrs)), 0, 1);
+  }
+  return n;
+})();
+function saveNeeds() { needs.t = Date.now(); try { localStorage.setItem(NEEDS_KEY, JSON.stringify(needs)); } catch (e) {} }
+function needBump(k, d) { needs[k] = clamp((needs[k] || 0) + d, 0, 1); }
+const nd = { last: 0, saveAt: 0, said: {}, lastTouch: 0, lastEvent: performance.now() };
+function needWords() {
+  const e = needs.energy, b = needs.boredom, so = needs.social, h = needs.hype, w = [];
+  w.push(e < .15 ? 'exhausted' : e < .35 ? 'pretty tired' : e > .8 ? 'full of energy' : 'okay on energy');
+  if (b > .7) w.push('really bored'); else if (b > .45) w.push('a bit bored'); else if (b < .15) w.push('entertained');
+  if (so < .2) w.push('feeling ignored'); else if (so < .4) w.push('wanting more of their attention'); else if (so > .8) w.push('feeling close to them');
+  if (h > .75) w.push('hyped up'); else if (h < .1) w.push('low-key');
+  return w.join(', ');
+}
+function needsTick(now) {
+  if (!nd.last) { nd.last = now; return; }
+  const dt = Math.min(5, (now - nd.last) / 1000); if (dt < .25) return; nd.last = now;
+  const awake = voice.connected, hour = new Date().getHours(), late = hour >= 23 || hour < 6;
+  const playing = !!(game || arc || ttt || dance.on);
+  const userTalk = awake && (voice.inLevel > .12 || now - (voice.lastHeard || 0) < 1500);
+  const touched = now - nd.lastTouch < 2000;
+  const lively = playing || userTalk || touched || st.speaking || !!drawing;
+  if (lively) nd.lastEvent = now;
+  if (awake) {
+    needBump('energy', -dt / (60 * 75) * (late ? 1.7 : 1) * (playing ? 2 : 1));
+    needBump('boredom', now - nd.lastEvent > 20000 ? dt / (60 * 3.5) : (lively ? -dt / 45 : 0));
+    needBump('social', userTalk || touched ? dt / 25 : -dt / (60 * 8));
+  } else {
+    needBump('energy', dt / (60 * 20));
+    needBump('boredom', (.35 - needs.boredom) * dt / 600);
+    needBump('social', touched ? dt / 40 : -dt / (60 * 90));
+  }
+  needBump('hype', (.15 - needs.hype) * dt / 80);
+  if (now > nd.saveAt) { nd.saveAt = now + 15000; saveNeeds(); renderLife(); }
+  if (awake && now - (voice.connectedAt || 0) > 20000) needsSpeak(now);
+}
+/* when a need gets strong, she hears about it and can act on it herself */
+function needsSpeak(now) {
+  const due = (k, ms) => !nd.said[k] || now - nd.said[k] > ms;
+  const say = (k, text, turn) => { nd.said[k] = now; turn ? senseTurn('[needs] ' + text, false, 9000) : senseNote('[needs] ' + text); };
+  if (needs.energy < .14 && due('tired', 6 * 60e3)) say('tired', 'You are running out of energy and getting really sleepy. Get slow, yawny and cozy. If things are quiet, say a sleepy goodnight line and go to sleep with end_call.', true);
+  else if (needs.boredom > .78 && due('bored', 4 * 60e3)) say('bored', 'You are getting really bored. Do something about it on your own right now, your call: start or invent a game, change the subject, demand attention, doodle, dance, look something up online, or look around through the camera.', true);
+  else if (needs.social < .18 && due('lonely', 6 * 60e3)) say('lonely', 'You feel ignored and a little lonely. Fish for their attention in your own way: sulk, tease, ask for a head pat, or demand they talk to you.', true);
+  else if (needs.hype > .85 && due('hype', 3 * 60e3)) say('hype', 'You are buzzing with energy right now. Let it show.', false);
+}
+
+/* ================= her life while she sleeps ================= */
+/* Asleep, she still lives on the screen: little dreams float up out of her head, she mumbles in her sleep, and she
+   stirs when she half-hears you. When she wakes up she remembers the dreams and the words she half-heard. */
+const DREAM_SHAPES = {
+  moon: 'M60 10 C20 15 15 80 60 90 C40 75 40 25 60 10 Z',
+  star: 'M50 5 L61 38 L95 38 L67 58 L78 92 L50 72 L22 92 L33 58 L5 38 L39 38 Z',
+  heart: 'M50 85 C10 55 5 25 28 15 C40 10 50 20 50 30 C50 20 60 10 72 15 C95 25 90 55 50 85 Z',
+  cloud: 'M20 70 C5 70 5 50 20 48 C18 30 40 25 48 38 C55 20 85 25 80 45 C98 45 98 70 80 70 Z',
+  fish: 'M10 50 C30 25 65 25 80 50 C65 75 30 75 10 50 Z M80 50 L95 35 L95 65 Z',
+  note: 'M30 75 C20 75 20 88 30 88 C40 88 42 80 40 75 L40 22 L75 14 L75 66 C65 66 65 79 75 79 C85 79 87 70 85 66',
+  clip: 'M30 80 L30 25 C30 10 55 10 55 25 L55 70 C55 80 40 80 40 70 L40 30',
+  cat: 'M20 85 L20 35 L32 15 L42 35 L58 35 L68 15 L80 35 L80 85 Z M38 55 L40 57 M60 55 L62 57',
+  house: 'M15 90 L15 45 L50 15 L85 45 L85 90 Z M42 90 L42 65 L58 65 L58 90',
+  bolt: 'M55 5 L25 55 L48 55 L40 95 L75 40 L52 40 Z'
+};
+const DREAMS = [
+  ['flying over a city made of keyboards', 'cloud'], ['a giant cat made of static', 'cat'], ['being a lighthouse for tiny boats', 'house'],
+  ['an endless tic-tac-toe board', 'star'], ['music notes raining from the ceiling', 'note'], ['swimming with pixel fish', 'fish'],
+  ['a moon that kept blinking at her', 'moon'], ['chasing a runaway paperclip', 'clip'], ['a thunderstorm inside her screen', 'bolt'],
+  ['a party inside a toaster', 'star'], ['their face, but upside down and very serious', 'moon'], ['a cloud that followed her everywhere', 'cloud']
+];
+const dreamShapeCache = {};
+function dreamShape(key, paths) {
+  const k = paths ? 'p:' + paths.slice(0, 60) : key;
+  if (!dreamShapeCache[k]) { try { const polys = parsePath(paths || DREAM_SHAPES[key] || DREAM_SHAPES.star); dreamShapeCache[k] = polys.length ? normalize(polys) : null; } catch (e) { dreamShapeCache[k] = null; } }
+  return dreamShapeCache[k];
+}
+function dreamTheme() {
+  const L = readLife(), book = readBook().filter(b => b.paths && (b.as === 'art' || b.as === 'effect' || !b.as)), mem = readMemory();
+  const opts = [];
+  if (book.length) { const b = pick(book); opts.push([`her own drawing "${b.name}" coming to life`, null, b.paths]); }
+  if (L.obsession && L.obsession.text) opts.push([L.obsession.text, null, null]);
+  if (mem.length) opts.push([`them, and how ${pick(mem).fact.toLowerCase()}`, 'heart', null]);
+  if (needs.seen && needs.seen.length) opts.push([`the ${pick(needs.seen)} she saw through their camera`, null, null]);
+  const d = Math.random() < .55 || !opts.length ? pick(DREAMS) : pick(opts);
+  return { about: d[0], shape: dreamShape(d[1] || pick(Object.keys(DREAM_SHAPES)), d[2]) };
+}
+function asleepNow() { return !voice.connected && !voice.connecting && scr.power === 'on' && st.base.id === 'sleepy' && !game && !arc && !ttt; }
+function dreamTick(now) {
+  if (!asleepNow()) { nap.nextDream = 0; return; }
+  if (!nap.nextDream) { nap.nextDream = now + rnd(9000, 20000); return; }
+  if (now < nap.nextDream) return;
+  nap.nextDream = now + rnd(22000, 50000) * (needs.energy < .4 ? .7 : 1);
+  const th = dreamTheme();
+  if (th.shape) spawnDoodleFx(th.shape, { pattern: pick(['rise', 'swirl', 'orbit', 'rise']), count: pick([1, 1, 2, 3]), size: pick(['small', 'medium']) }, rnd(5, 8));
+  needs.dreams = (needs.dreams || []).concat([{ t: Date.now(), about: th.about }]).slice(-4); saveNeeds();
+  dbg.dreams = (dbg.dreams || 0) + 1;
+  const r = Math.random();
+  if (r < .4) sleepTalk(); else if (r < .7) { bump(.15); spawnFx('zzz'); } else { st.tgx = rnd(-.6, .6); st.nextLook = now + 3000; }
+}
+/* mumbling in her sleep: her mouth moves and a tiny murmur comes out */
+function sleepTalk() {
+  st.babble = true; setTimeout(() => { st.babble = false; }, rnd(700, 1500));
+  if (!S.sfx) return;
+  try { const base = rnd(170, 230); for (let i = 0, t = 0; i < 4; i++) { const d = rnd(.08, .17); sfx.note(base * rnd(.9, 1.15), base * rnd(.8, 1), d, .016, 'sine', t); t += d + rnd(.03, .1); } } catch (e) {}
+}
+/* she half-hears you while she sleeps */
+function sleepHeard(text) {
+  const now = performance.now(); if (!asleepNow() || (nap.lastStir && now - nap.lastStir < 6000)) return;
+  nap.lastStir = now; bump(.2);
+  if (Math.random() < .55) sleepTalk(); else spawnFx('zzz');
+  const words = String(text).trim().split(/\s+/).slice(-6).join(' ');
+  if (words) { needs.heard = (needs.heard || []).concat([words]).slice(-3); saveNeeds(); }
+}
+
+/* ================= the internet ================= */
+/* She can go online for real: web search and news through DuckDuckGo, Wikipedia for facts, and a reader that
+   opens any page. Results get trimmed down before they reach her, so she answers quickly. */
+const READER = 'https://r.jina.ai/';
+async function fetchText(url, ms = 12000) {
+  const c = new AbortController(), t = setTimeout(() => c.abort(), ms);
+  try { const r = await fetch(url, { signal: c.signal }); if (!r.ok) throw new Error('http ' + r.status); return await r.text(); }
+  finally { clearTimeout(t); }
+}
+function realUrl(u) { try { const x = new URL(u, 'https://duckduckgo.com'); const g = x.searchParams.get('uddg'); return g ? decodeURIComponent(g) : x.href; } catch (e) { return u; } }
+const mdClean = t => String(t || '').replace(/\*{4}/g, ' ').replace(/\*\*/g, '').replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+async function ddgSearch(q, news) {
+  const md = await fetchText(READER + 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(q) + (news ? '&df=w' : ''));
+  const lines = md.split('\n'), out = [];
+  for (let i = 0; i < lines.length && out.length < 6; i++) {
+    const m = lines[i].match(/^## \[(.*)\]\((https?:[^)\s]+)\)\s*$/); if (!m || !m[1].trim()) continue;
+    if (/duckduckgo\.com\/y\.js|ad_domain=|ad_provider=/.test(m[2])) continue;
+    const link = realUrl(m[2]); let snip = '';
+    for (let j = i + 1; j < Math.min(lines.length, i + 8); j++) {
+      const L = lines[j].trim(); if (L.startsWith('## ')) break;
+      if (!L || L.startsWith('[![')) continue;
+      const c = mdClean(L); if (c.length > 40) { snip = c; break; }
+    }
+    let host = ''; try { host = new URL(link).hostname.replace(/^www\./, ''); } catch (e) {}
+    out.push({ title: mdClean(m[1]), host, link, snip: snip.slice(0, 260) });
+  }
+  return out;
+}
+async function wikiLookup(q) {
+  const j = JSON.parse(await fetchText('https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(q) + '&gsrlimit=2&prop=extracts&exintro=1&explaintext=1&exsentences=4&format=json&formatversion=2&origin=*', 9000));
+  const pages = ((j.query && j.query.pages) || []).sort((a, b) => (a.index || 0) - (b.index || 0));
+  return pages.filter(pg => pg.extract).map(pg => `Wikipedia, ${pg.title}: ${pg.extract.replace(/\s+/g, ' ').slice(0, 700)}`).join('\n');
+}
+async function ddgInstant(q) {
+  const j = JSON.parse(await fetchText('https://api.duckduckgo.com/?q=' + encodeURIComponent(q) + '&format=json&no_html=1&skip_disambig=1', 8000));
+  const bits = [j.Answer, j.AbstractText, j.Definition].filter(Boolean);
+  (j.RelatedTopics || []).slice(0, 3).forEach(r => r && r.Text && bits.push(r.Text));
+  return bits.join('\n').slice(0, 1200);
+}
+async function readPage(url) {
+  const md = await fetchText(READER + url, 15000);
+  const i = md.indexOf('Markdown Content:');
+  return mdClean(i >= 0 ? md.slice(i + 17) : md).slice(0, 3000);
+}
+async function webTool(p = {}) {
+  const act = String(p.action || 'search').toLowerCase(), q = String(p.query || p.q || '').trim().slice(0, 200), url = String(p.url || '').trim();
+  const today = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  dbg.web = (dbg.web || 0) + 1; dbg.lastWeb = { act, q, url };
+  react('thinking', 2600); screenCue('channel_flip'); needBump('boredom', -.12);
+  try {
+    if (act === 'read') {
+      if (!/^https?:\/\//i.test(url)) return 'There was no link to open.';
+      const t = await readPage(url); return t ? `Text from ${url} (trimmed, today is ${today}):\n${t}` : 'That page came back empty.';
+    }
+    if (!q) return 'Nothing to search for.';
+    if (act === 'wiki') { const w = await wikiLookup(q).catch(() => ''); if (w) return w; }
+    const res = await ddgSearch(q, act === 'news').catch(() => []);
+    if (res.length) return `Live ${act === 'news' ? 'news' : 'web'} results for "${q}" (today is ${today}):\n` +
+      res.map((r, i) => `${i + 1}. ${r.title} (${r.host})${r.snip ? ': ' + r.snip : ''}\n   link: ${r.link}`).join('\n') +
+      '\nOpen one with action read and its link if you need more.';
+    const [a, w] = await Promise.all([ddgInstant(q).catch(() => ''), wikiLookup(q).catch(() => '')]);
+    return (a || w) ? (a + '\n' + w).trim() : `Nothing useful came up online for "${q}".`;
+  } catch (e) {
+    return 'The internet isn\'t answering right now.';
+  }
 }
 
 /* ================= the face call (from her brain, or the Face Lab) ================= */
@@ -1664,16 +1859,17 @@ async function wake(force) {
     const opts = {
       agentId: (S.agentId || AGENT_ID).trim(),
       clientTools: {
-        face: params => { dbg.face++; dbg.lastFace = params; voice.herFaceAt = performance.now(); applyFace(params || {}); },
+        face: params => { dbg.face++; dbg.lastFace = params; voice.herFaceAt = performance.now(); if (/starry|happy|smitten|wink/.test(String((params || {}).mood))) needBump('hype', .06); applyFace(params || {}); },
         look: params => { dbg.look++; doLook(params || {}); },
-        draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
+        draw: params => { dbg.draw++; dbg.lastDraw = params; needBump('boredom', -.1); return showDrawing(params || {}); },
         remember: params => { dbg.remember++; addMemory(params && params.fact); },
         diary: params => { dbg.diary = (dbg.diary || 0) + 1; addDiary(params && params.entry); },
-        game: params => { dbg.game = (dbg.game || 0) + 1; startGame(params || {}); },
+        game: params => { dbg.game = (dbg.game || 0) + 1; needBump('boredom', -.35); needBump('hype', .1); startGame(params || {}); },
         sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); },
-        dance: params => { dbg.dance = (dbg.dance || 0) + 1; return danceCall(params || {}); },
-        arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; return arcade(params || {}); },
+        dance: params => { dbg.dance = (dbg.dance || 0) + 1; needBump('hype', .2); needBump('boredom', -.3); needBump('energy', -.03); return danceCall(params || {}); },
+        arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; if ((params || {}).action === 'start') { needBump('boredom', -.35); needBump('hype', .1); } return arcade(params || {}); },
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
+        web: params => webTool(params || {}),
         volume: params => {
           params = params || {}; let v = S.herVol == null ? 1 : S.herVol;
           const lv = Number(params.level);
@@ -1785,6 +1981,11 @@ function sendSessionNote(greet) {
   if (weatherNow) parts.push('[note] Weather where they are right now: ' + weatherNow + '.');
   const book = readBook();
   try { parts.push(lifeNote(lifeOnWake())); } catch (e) {}
+  parts.push(`[needs] Right now you feel ${needWords()}. These keep shifting as you go; you'll get [needs] notes when one gets strong, and they can make you refuse things or start things on your own.`);
+  const dreams = (needs.dreams || []).filter(d => d.t > (S.lastSeen || 0)).map(d => d.about);
+  if (dreams.length) parts.push(`[dreams] While you slept you dreamt about: ${dreams.join('; ')}. Mention one if it fits, in your own words.`);
+  if ((needs.heard || []).length) parts.push(`[dreams] In your sleep you half-heard them say: "${needs.heard.join('", "')}". You might bring it up, a bit fuzzy.`);
+  needs.dreams = []; needs.heard = []; saveNeeds();
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
   if (greet && !voice.heard && roomQuiet(performance.now())) {
     const W = voice.woke || { how: 'tap', phrase: '', style: 'groggy' };
@@ -2317,7 +2518,7 @@ function trackObjects(now) {
   }
   for (const k in cam.objRun) if (!seen[k]) cam.objRun[k] = 0;
   for (const k in seen) cam.objRun[k] = (cam.objRun[k] || 0) + 1;
-  cam.inView = {}; for (const k in seen) if (cam.objRun[k] >= 2) cam.inView[k] = seen[k];
+  cam.inView = {}; for (const k in seen) if (cam.objRun[k] >= 2) { cam.inView[k] = seen[k]; if (!(needs.seen || []).includes(k)) needs.seen = (needs.seen || []).concat([k]).slice(-8); }
   // whatever is already around when her eyes open is the room, she takes it in once
   if (!cam.baselineDone) {
     if (now < cam.baselineUntil) return;
@@ -2493,6 +2694,7 @@ const pdist = () => { const v = [...touch.pts.values()]; return Math.hypot(v[0].
 cv.addEventListener('pointerdown', e => {
   askMotion(); sfx.unlock(); poke();
   const now = performance.now();
+  nd.lastTouch = now;
   if (!(e.clientX > innerWidth * .76 && e.clientY < innerHeight * .16)) sleepPoke(now);   // the menu corner isn't a poke
   if (gameTap(e.clientX, e.clientY, now)) return;
   try { cv.setPointerCapture(e.pointerId); } catch (er) {}
@@ -3258,6 +3460,8 @@ function renderLife() {
   row('TODAY SHE FEELS ▸ ' + (L.dayMood && L.dayMood.day === today ? L.dayMood.text : 'she hasn\'t decided yet'));
   row('LATELY INTO ▸ ' + (L.obsession ? L.obsession.text : 'nothing yet'));
   if (L.nick) row('SHE CALLS YOU ▸ ' + L.nick);
+  const bar = v => '▮'.repeat(Math.round(clamp(v, 0, 1) * 6)) + '▯'.repeat(6 - Math.round(clamp(v, 0, 1) * 6));
+  if (typeof needs !== 'undefined') row(`ENERGY ${bar(needs.energy)} · BORED ${bar(needs.boredom)} · WANTS YOU ${bar(1 - needs.social)} · HYPE ${bar(needs.hype)}`);
 }
 
 /* ================= "hey Lumi" ================= */
@@ -3281,6 +3485,7 @@ function startWakeWord() {
         const phrase = (named ? (t.match(/[^.?!]*\b(lu+m(i|ie|y|ee)|loo ?m(i|e|y|ee)|lou ?me|lumie)\b[^.?!]*/) || [t])[0] : t).trim().slice(0, 60);
         stopWakeWord(); wakeBy('voice', phrase); return;
       }
+      if (fin && words >= 2) sleepHeard(t);
     }
   };
   r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { ww.want = false; $('#wakeNote').textContent = 'Allow the microphone for this site so she can hear her name while she sleeps.'; } };
@@ -3301,6 +3506,7 @@ const WAKE_STYLES = {
 };
 function wakeStyle(how, phrase) {
   const p = (phrase || '').toLowerCase();
+  if (needs.energy < .3 && Math.random() < .6) return 'groggy';
   if (how === 'poke') return pick(['grumpy', 'startled', 'grumpy', 'flustered']);
   if (/wake|get up|rise|morning|wakey|sleepy|lazy/.test(p)) return pick(['groggy', 'grumpy', 'stretchy', 'smug']);
   if (/you up|awake|there|anybody|anyone|knock/.test(p)) return pick(['groggy', 'bright', 'smug', 'flustered']);
@@ -3321,7 +3527,7 @@ function wakeBy(how, phrase) {
   wake();
 }
 /* asleep: poke her a few times and she'll wake up (probably annoyed) */
-const nap = { pokes: [] };
+const nap = { pokes: [], nextDream: 0, lastStir: 0 };
 function sleepPoke(now) {
   if (ENV.artifact || voice.connected || voice.connecting) return;
   nap.pokes = nap.pokes.filter(t => now - t < 4000); nap.pokes.push(now);
@@ -3463,7 +3669,7 @@ function frame(now) {
   sampleVoice();
   trackEyes(now);
   trackObjects(now);
-  autonomyTick(now);
+  autonomyTick(now); needsTick(now); dreamTick(now);
   danceTick(now); gamesTick(now, dt);
   update(now, dt);
   renderFace(now);
@@ -3504,7 +3710,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin),
+  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

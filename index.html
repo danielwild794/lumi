@@ -101,6 +101,11 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
 .inline input{flex:1}
 .note{margin:0;font-size:18px;line-height:1.15;opacity:.78;max-width:60ch}
 .note b{font-weight:normal;opacity:1;color:var(--phos)}
+.mem{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:18px;line-height:1.15}
+.mem li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;border-left:2px solid rgba(var(--phos-rgb),.45);padding-left:8px}
+.mem li span{min-width:0;overflow-wrap:anywhere}
+.osd .mem button{min-height:30px;padding:0 8px;font-size:18px}
+.mem .empty{border:0;padding:0;opacity:.6}
 .osd-foot{display:flex;flex-wrap:wrap;gap:2px 14px;padding:8px 14px 10px;border-top:2px solid rgba(var(--phos-rgb),.45);font-size:17px;opacity:.72}
 
 .toast{position:fixed;z-index:6;left:50%;top:calc(env(safe-area-inset-top,0px) + 58px);transform:translateX(-50%);max-width:calc(100% - 32px);width:max-content;
@@ -188,6 +193,18 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
         </div>
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">CAMERA PEEK</span><button id="peekBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="sec">
+          <span class="lbl" id="memLbl">WHAT SHE REMEMBERS</span>
+          <ul class="mem" id="memList"></ul>
+          <button id="memClear" type="button">FORGET EVERYTHING</button>
+          <p class="note">She saves these herself while you talk. They stay on this device only.</p>
+        </div>
+        <div class="sec">
+          <span class="lbl" id="bookLbl">HER SKETCHBOOK</span>
+          <ul class="mem" id="bookList"></ul>
+          <p class="note">Every drawing she names lands here. Tap one to have her show it again.</p>
+        </div>
         <div class="row"><span class="lbl">SHE REACTS TO YOUR FACE</span><button id="reactBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">GLOW</span>
           <div class="inline"><button id="glowDn" type="button" aria-label="Less glow">−</button><span class="vu" id="glowBars" role="meter" aria-label="Glow" aria-valuemin="0" aria-valuemax="100" style="height:22px"></span><button id="glowUp" type="button" aria-label="More glow">+</button></div>
@@ -230,7 +247,7 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70 }, readSettings());
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0 }, readSettings());
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -286,8 +303,8 @@ const st = {
   blushA: 0, blushAV: 0, blushBoost: 0,
   vw: 4.2, vwV: 0, vh: 0, vhV: 0, vr: 0, vrV: 0, visKey: 'rest', nextVis: 0,
   morph: 0, morphV: 0, morphT: 0, morphShape: 'heart', morphUntil: 0, eyeOvr: null, eyeOvrUntil: 0,
-  listenLift: 0, thinking: false,
-  region: { x: 0, y: 0, w: innerWidth, h: innerHeight }
+  listenLift: 0, thinking: false, headTrack: 0, hide: 0, hideT: 0, touchGaze: null,
+  region: { x: 0, y: 0, w: innerWidth, h: innerHeight }, dregion: null, dTarget: null
 };
 
 /* combine base mood + blended mood + dials into one target face */
@@ -721,6 +738,188 @@ function drawThinking(t) {
   ctx.restore();
 }
 
+/* ================= her drawings (she makes every one herself) ================= */
+/* Paths come from her brain as SVG path data. Only path commands and numbers are read, so nothing
+   but her white strokes can reach the screen. Wireframes are her own 3D points and lines. */
+function arcPts(x1, y1, rx, ry, phi, fa, fs, x2, y2, push) {
+  rx = Math.abs(rx); ry = Math.abs(ry);
+  if (x1 === x2 && y1 === y2) return;
+  if (!rx || !ry) { push(x2, y2); return; }
+  const p = phi * Math.PI / 180, cp = Math.cos(p), sp = Math.sin(p);
+  const dx = (x1 - x2) / 2, dy = (y1 - y2) / 2, x1p = cp * dx + sp * dy, y1p = -sp * dx + cp * dy;
+  const lam = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+  if (lam > 1) { const s = Math.sqrt(lam); rx *= s; ry *= s; }
+  const num = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p, den = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+  let co = den ? Math.sqrt(Math.max(0, num / den)) : 0; if (fa === fs) co = -co;
+  const cxp = co * rx * y1p / ry, cyp = -co * ry * x1p / rx;
+  const cx = cp * cxp - sp * cyp + (x1 + x2) / 2, cy = sp * cxp + cp * cyp + (y1 + y2) / 2;
+  const ang = (ux, uy, vx, vy) => Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+  const t1 = ang(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
+  let dt = ang((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+  if (!fs && dt > 0) dt -= TAU; else if (fs && dt < 0) dt += TAU;
+  const n = Math.max(6, Math.ceil(Math.abs(dt) / (Math.PI / 16)));
+  for (let k = 1; k <= n; k++) { const t = t1 + dt * k / n, ex = rx * Math.cos(t), ey = ry * Math.sin(t); push(cp * ex - sp * ey + cx, sp * ex + cp * ey + cy); }
+}
+function parsePath(d) {
+  const toks = String(d || '').slice(0, 4000).match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || [];
+  const polys = []; let cur = null, x = 0, y = 0, sx = 0, sy = 0, cmd = '', lc = null, lq = null, i = 0, pts = 0;
+  const isCmd = t => /^[A-Za-z]$/.test(t);
+  const has = n => { for (let k = 0; k < n; k++) if (i + k >= toks.length || isCmd(toks[i + k])) return false; return true; };
+  const num = () => { const v = parseFloat(toks[i++]); return isFinite(v) ? clamp(v, -1e4, 1e4) : 0; };
+  const start = () => { if (!cur) { cur = [[x, y]]; polys.push(cur); } };
+  const push = (px, py) => { start(); cur.push([px, py]); pts++; };
+  const cubic = (x1, y1, x2, y2, x3, y3) => { const x0 = x, y0 = y; for (let k = 1; k <= 14; k++) { const t = k / 14, u = 1 - t; push(u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3, u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3); } };
+  const quad = (x1, y1, x2, y2) => { const x0 = x, y0 = y; for (let k = 1; k <= 12; k++) { const t = k / 12, u = 1 - t; push(u * u * x0 + 2 * u * t * x1 + t * t * x2, u * u * y0 + 2 * u * t * y1 + t * t * y2); } };
+  while (i < toks.length && pts < 6000) {
+    if (isCmd(toks[i])) cmd = toks[i++];
+    else if (!cmd) { i++; continue; }
+    const C = cmd.toUpperCase(), r = cmd !== C, ox = r ? x : 0, oy = r ? y : 0;
+    if (C === 'Z') { if (cur && cur.length > 1) cur.push([sx, sy]); x = sx; y = sy; cur = null; cmd = ''; lc = lq = null; continue; }
+    const need = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7 }[C];
+    if (!need || !has(need)) { cmd = ''; i++; continue; }
+    if (C === 'M') { x = num() + ox; y = num() + oy; sx = x; sy = y; cur = null; start(); cmd = r ? 'l' : 'L'; lc = lq = null; continue; }
+    if (C === 'L') { const nx = num() + ox, ny = num() + oy; push(nx, ny); x = nx; y = ny; lc = lq = null; }
+    else if (C === 'H') { const nx = num() + ox; push(nx, y); x = nx; lc = lq = null; }
+    else if (C === 'V') { const ny = num() + oy; push(x, ny); y = ny; lc = lq = null; }
+    else if (C === 'C') { const a = num() + ox, b = num() + oy, c = num() + ox, e = num() + oy, f = num() + ox, g = num() + oy; cubic(a, b, c, e, f, g); lc = [c, e]; lq = null; x = f; y = g; }
+    else if (C === 'S') { const c = num() + ox, e = num() + oy, f = num() + ox, g = num() + oy; const a = lc ? 2 * x - lc[0] : x, b = lc ? 2 * y - lc[1] : y; cubic(a, b, c, e, f, g); lc = [c, e]; lq = null; x = f; y = g; }
+    else if (C === 'Q') { const a = num() + ox, b = num() + oy, f = num() + ox, g = num() + oy; quad(a, b, f, g); lq = [a, b]; lc = null; x = f; y = g; }
+    else if (C === 'T') { const f = num() + ox, g = num() + oy; const a = lq ? 2 * x - lq[0] : x, b = lq ? 2 * y - lq[1] : y; quad(a, b, f, g); lq = [a, b]; lc = null; x = f; y = g; }
+    else if (C === 'A') { const rx = num(), ry = num(), rot = num(), fa = num() ? 1 : 0, fs = num() ? 1 : 0, f = num() + ox, g = num() + oy; start(); arcPts(x, y, rx, ry, rot, fa, fs, f, g, push); x = f; y = g; lc = lq = null; }
+  }
+  return polys.filter(p => p.length > 1);
+}
+/* fit her drawing into a unit box centred on 0 */
+function normalize(polys) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of polys) for (const [x, y] of p) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const sc = 1 / Math.max(x1 - x0, y1 - y0, 1e-6), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  let len = 0;
+  const out = polys.map(p => { const q = p.map(([x, y]) => [(x - cx) * sc, (y - cy) * sc]); for (let k = 1; k < q.length; k++) len += Math.hypot(q[k][0] - q[k - 1][0], q[k][1] - q[k - 1][1]); return q; });
+  return { polys: out, len };
+}
+/* wireframe: "x y z, x y z, ... | 0-1 1-2 ..." */
+function parseWire(s) {
+  const [vp, ep] = String(s || '').slice(0, 3000).split('|');
+  if (!ep) return null;
+  const v = (vp.match(/[-+]?(?:\d+\.?\d*|\.\d+)/g) || []).map(Number);
+  const V = []; for (let k = 0; k + 2 < v.length && V.length < 200; k += 3) V.push([v[k], v[k + 1], v[k + 2]]);
+  const E = []; for (const m of ep.matchAll(/(\d+)\s*-\s*(\d+)/g)) { const a = +m[1], b = +m[2]; if (a < V.length && b < V.length && E.length < 400) E.push([a, b]); }
+  if (V.length < 2 || !E.length) return null;
+  let r = 0; const c = [0, 1, 2].map(k => V.reduce((s2, p) => s2 + p[k], 0) / V.length);
+  const VV = V.map(p => { const q = [p[0] - c[0], p[1] - c[1], p[2] - c[2]]; r = Math.max(r, Math.hypot(...q)); return q; });
+  return { v: VV.map(p => p.map(n => n / (r || 1))), e: E };
+}
+
+/* her sketchbook: drawings she named, kept on this device so she can bring them back */
+const BOOK_KEY = 'lumi-live:sketchbook';
+function readBook() { try { const b = JSON.parse(localStorage.getItem(BOOK_KEY) || '[]'); return Array.isArray(b) ? b : []; } catch (e) { return []; } }
+function writeBook(b) { try { localStorage.setItem(BOOK_KEY, JSON.stringify(b.slice(-60))); } catch (e) {} renderBook(); }
+function bookKey(n) { return String(n || '').toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim(); }
+
+let drawing = null, drawingOld = null;
+const SIZE_K = { small: .62, medium: .8, big: .96 };
+function showDrawing(p = {}, local = false) {
+  const now = performance.now();
+  if (p.clear === true || p.clear === 'true') { endDrawing(); return 'cleared'; }
+  let src = null;
+  if (p.reuse) {
+    const k = bookKey(p.reuse), hit = readBook().find(d => bookKey(d.name) === k) || readBook().find(d => bookKey(d.name).includes(k) && k.length > 2);
+    if (hit) src = { paths: hit.paths, wireframe: hit.wireframe, name: hit.name };
+  }
+  if (!src) src = { paths: p.paths, wireframe: p.wireframe, name: p.name || p.label };
+  let shape = null, wire = null;
+  if (src.wireframe) wire = parseWire(src.wireframe);
+  if (!wire && src.paths) { const polys = parsePath(src.paths); if (polys.length) shape = normalize(polys); }
+  if (!wire && !shape) return 'nothing to draw';
+  if (src.name && !p.reuse) {
+    const book = readBook().filter(d => bookKey(d.name) !== bookKey(src.name));
+    book.push({ name: String(src.name).slice(0, 32), paths: wire ? '' : String(src.paths).slice(0, 4000), wireframe: wire ? String(src.wireframe).slice(0, 3000) : '', t: Date.now() });
+    writeBook(book);
+  }
+  const where = ['left', 'right', 'above', 'full'].includes(p.where) ? p.where : 'right';
+  const motion = ['still', 'float', 'bounce', 'spin', 'wobble', 'shake', 'grow'].includes(p.motion) ? p.motion : (wire ? 'spin' : 'float');
+  const secs = clamp(isFinite(+p.seconds) && p.seconds !== '' && p.seconds != null ? +p.seconds : 8, 2, 25);
+  const len = shape ? shape.len : wire.e.length * .9;
+  if (drawing) { drawingOld = drawing; drawingOld.outT0 = now; }
+  drawing = { shape, wire, where, motion, size: SIZE_K[p.size] || SIZE_K.medium, label: String(p.label || '').slice(0, 18).toUpperCase(),
+    t0: now, drawDur: clamp(300 + len * 120, 600, 2200), until: now + secs * 1000, outT0: 0, len };
+  if (where === 'full') { st.hideT = 1; screenCue('channel_flip'); }
+  else { st.hideT = 0; st.tgx = where === 'left' ? -.95 : where === 'right' ? .95 : 0; st.tgy = where === 'above' ? -.9 : -.2; st.nextLook = now + 1300; }
+  sfx.scribble(drawing.drawDur / 1000);
+  return 'drawn';
+}
+function endDrawing() { if (drawing && !drawing.outT0) drawing.outT0 = performance.now(); }
+
+function strokePartial(polys, upto) {
+  let used = 0;
+  for (const p of polys) {
+    if (used >= upto) break;
+    ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]);
+    for (let k = 1; k < p.length; k++) {
+      const sl = Math.hypot(p[k][0] - p[k - 1][0], p[k][1] - p[k - 1][1]);
+      if (used + sl > upto) { const f = (upto - used) / (sl || 1); ctx.lineTo(lerp(p[k - 1][0], p[k][0], f), lerp(p[k - 1][1], p[k][1], f)); used = upto; break; }
+      ctx.lineTo(p[k][0], p[k][1]); used += sl;
+    }
+    ctx.stroke();
+  }
+  return used;
+}
+function renderOneDrawing(d, now, rect) {
+  if (!rect) return;
+  const age = (now - d.t0) / 1000, still = reduceMQ.matches;
+  const out = d.outT0 ? clamp((now - d.outT0) / 380, 0, 1) : 0;
+  const pin = still ? 1 : backOut(clamp(age / .35, 0, 1));
+  const sizePx = Math.min(rect.w, rect.h) * (d.where === 'full' ? .8 : .78) * d.size;
+  let x = rect.x + rect.w / 2, y = rect.y + rect.h / 2 - (d.label ? sizePx * .06 : 0), rot = 0, sc = pin * (1 - out * .4);
+  if (!still) {
+    if (d.motion === 'float') { y += Math.sin(age * 1.6) * sizePx * .04; rot = Math.sin(age * 1.1) * .04; }
+    else if (d.motion === 'bounce') { y -= Math.abs(Math.sin(age * 3.4)) * sizePx * .09; }
+    else if (d.motion === 'spin' && !d.wire) rot = age * 1.7;
+    else if (d.motion === 'wobble') rot = Math.sin(age * 5) * .13;
+    else if (d.motion === 'shake') { x += rnd(-1, 1) * sizePx * .015; y += rnd(-1, 1) * sizePx * .015; }
+    else if (d.motion === 'grow') sc *= 1 + Math.sin(age * 2.4) * .07;
+  }
+  const prog = clamp((now - d.t0) / d.drawDur, 0, 1);
+  const lwPx = clamp(sizePx * .016, 2, 5);
+  const pass = (blur, alpha) => {
+    ctx.save();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sizePx * sc, sizePx * sc);
+    ctx.globalAlpha = alpha * (1 - out); ctx.strokeStyle = COL; ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = blur;
+    ctx.lineWidth = lwPx / (sizePx * sc || 1); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (d.shape) strokePartial(d.shape.polys, d.shape.len * easeOut(prog));
+    else {
+      const ay = still ? .6 : age * (d.motion === 'spin' ? 1.3 : .5), ax = .45 + (still ? 0 : Math.sin(age * .7) * .25);
+      const cyA = Math.cos(ay), syA = Math.sin(ay), cxA = Math.cos(ax), sxA = Math.sin(ax);
+      const P = d.wire.v.map(([vx, vy, vz]) => { const x1 = vx * cyA + vz * syA, z1 = -vx * syA + vz * cyA, y2 = vy * cxA - z1 * sxA, z2 = vy * sxA + z1 * cxA, f = 2.6 / (z2 + 3.4); return [x1 * f * .5, y2 * f * .5]; });
+      const n = Math.ceil(d.wire.e.length * easeOut(prog));
+      ctx.beginPath();
+      for (let k = 0; k < n; k++) { const [a, b] = d.wire.e[k]; ctx.moveTo(P[a][0], P[a][1]); ctx.lineTo(P[b][0], P[b][1]); }
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+  pass(6 * DPR, .5); pass(1.5 * DPR, 1);
+  if (d.label && prog > .6) {
+    ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalAlpha = clamp((prog - .6) / .4, 0, 1) * (1 - out);
+    ctx.font = `${Math.round(clamp(sizePx * .14, 16, 44))}px VT323, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = 4 * DPR;
+    ctx.fillText(d.label, rect.x + rect.w / 2, y + sizePx * .56);
+    ctx.restore();
+  }
+}
+function renderDrawings(now) {
+  if (drawingOld) { if (now - drawingOld.outT0 > 400) drawingOld = null; else renderOneDrawing(drawingOld, now, drawingOld.rect); }
+  if (drawing) {
+    if (!drawing.outT0 && now > drawing.until) endDrawing();
+    if (drawing.outT0 && now - drawing.outT0 > 400) { drawing = null; st.hideT = 0; return; }
+    const rect = drawing.where === 'full' ? st.region : st.dregion;
+    drawing.rect = rect && { ...rect };
+    renderOneDrawing(drawing, now, rect);
+  }
+}
+
 /* ================= screen (CRT) layer ================= */
 const scr = { zoom: 1, zoomV: 0, zoomT: 1, zoomUntil: 0, staticUntil: 0, staticA: 0, glitchUntil: 0, flashA: 0, flipUntil: 0,
   power: 'on', powerT0: 0, noSignal: false, noSignalUntil: 0, pop: null };
@@ -737,21 +936,21 @@ buildNoise();
 function screenCue(type, now = performance.now()) {
   const still = reduceMQ.matches;
   switch (type) {
-    case 'static': scr.staticUntil = now + 380; scr.staticA = .55; bump(1.1); break;
-    case 'glitch': scr.glitchUntil = now + (still ? 150 : 650); break;
-    case 'flash': scr.flashA = still ? .25 : .55; bump(1); break;
+    case 'static': scr.staticUntil = now + 380; scr.staticA = .55; bump(1.1); sfx.static(); break;
+    case 'glitch': scr.glitchUntil = now + (still ? 150 : 650); sfx.static(); break;
+    case 'flash': scr.flashA = still ? .25 : .55; bump(1); sfx.blip(); break;
     case 'zoom_in': scr.zoomT = 1.22; scr.zoomUntil = now + 2600; break;
     case 'zoom_out': scr.zoomT = .8; scr.zoomUntil = now + 2400; break;
-    case 'channel_flip': scr.flipUntil = now + 420; scr.staticUntil = now + 300; scr.staticA = .7; break;
+    case 'channel_flip': scr.flipUntil = now + 420; scr.staticUntil = now + 300; scr.staticA = .7; sfx.static(); break;
     case 'power_off': powerOff(); break;
     case 'no_signal': scr.noSignal = true; scr.noSignalUntil = now + 7000; break;
   }
 }
-function powerOff() { if (scr.power === 'off' || scr.power === 'turningOff') return; scr.power = 'turningOff'; scr.powerT0 = performance.now(); scr.noSignal = false; }
-function powerOn() { if (scr.power === 'on' || scr.power === 'turningOn') return; scr.power = 'turningOn'; scr.powerT0 = performance.now(); scr.staticUntil = performance.now() + 350; scr.staticA = .5; }
+function powerOff() { if (scr.power === 'off' || scr.power === 'turningOff') return; scr.power = 'turningOff'; scr.powerT0 = performance.now(); scr.noSignal = false; sfx.powerOff(); }
+function powerOn() { if (scr.power === 'on' || scr.power === 'turningOn') return; scr.power = 'turningOn'; scr.powerT0 = performance.now(); scr.staticUntil = performance.now() + 350; scr.staticA = .5; sfx.powerOn(); }
 function showPop(text) {
   const s = String(text || '').trim().slice(0, 10); if (!s) return;
-  scr.pop = { text: s.toUpperCase(), t0: performance.now() };
+  scr.pop = { text: s.toUpperCase(), t0: performance.now() }; sfx.blip();
 }
 
 /* ================= rendering ================= */
@@ -782,8 +981,10 @@ function renderFace(now) {
   ctx.clearRect(0, 0, fc.width, fc.height);
   const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
-  const g = S.glow / 100;
+  const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
   const layer = (blur, alpha, withFx) => {
+    if (faceA < .02) return;
+    alpha *= faceA;
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
     ctx.translate(ox, oy); ctx.rotate(st.head);
@@ -809,12 +1010,14 @@ function renderFace(now) {
       ctx.fillText(scr.pop.text, 0, 0); ctx.restore();
     }
   }
+  renderDrawings(now);
 }
 
 function composite(now) {
   const W = cv.width, H = cv.height, still = reduceMQ.matches;
-  mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.globalAlpha = 1; mctx.globalCompositeOperation = 'source-over';
-  mctx.fillStyle = '#000'; mctx.fillRect(0, 0, W, H);
+  mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.globalCompositeOperation = 'source-over';
+  // phosphor afterglow: the last frame fades instead of vanishing, like a real tube
+  mctx.globalAlpha = still ? 1 : .72; mctx.fillStyle = '#000'; mctx.fillRect(0, 0, W, H); mctx.globalAlpha = 1;
   const r = st.region, cx = (r.x + r.w / 2) * DPR, cy = (r.y + r.h / 2) * DPR;
 
   // power animation
@@ -907,6 +1110,18 @@ function regionTarget() {
     if (b.right < W * .6) R = { x: b.right + 8, y: top, w: Math.max(40, W - b.right - 8), h: R.h };
     else if (b.top > H * .25) R = { x: 0, y: top, w: W, h: Math.max(40, b.top - top - 4) };
   }
+  // when she draws, her face steps aside to make room for it
+  const d = drawing && !drawing.outT0 ? drawing : null;
+  if (d && d.where !== 'full') {
+    const land = R.w > R.h * 1.1;
+    let side = land ? d.where : 'above';
+    let F, D;
+    if (side === 'left') { D = { x: R.x, y: R.y, w: R.w * .42, h: R.h }; F = { x: R.x + R.w * .38, y: R.y, w: R.w * .62, h: R.h }; }
+    else if (side === 'right') { F = { x: R.x, y: R.y, w: R.w * .62, h: R.h }; D = { x: R.x + R.w * .58, y: R.y, w: R.w * .42, h: R.h }; }
+    else { D = { x: R.x, y: R.y, w: R.w, h: R.h * .44 }; F = { x: R.x, y: R.y + R.h * .4, w: R.w, h: R.h * .6 }; }
+    st.dTarget = D; return F;
+  }
+  st.dTarget = null;
   return R;
 }
 function spr(o, k, target, K, C, dt) { o[k + 'V'] += (K * (target - o[k]) - C * o[k + 'V']) * dt; o[k] += o[k + 'V'] * dt; }
@@ -957,13 +1172,13 @@ function update(now, dt) {
 
   const m = st.shown, T = eyeTargets(m);
   if (still) {
-    Object.assign(st.eye, T); st.eyeScale = st.irisScale = st.mouthScale = 1; st.hop = st.pop = 0; st.head = m.head || 0; st.blushA = m.blush || 0;
+    Object.assign(st.eye, T); st.eyeScale = st.irisScale = st.mouthScale = 1; st.hop = st.pop = 0; st.head = clamp((m.head || 0) + st.headTrack, -.16, .16); st.blushA = m.blush || 0;
     for (const side of ['L', 'R']) for (let i = 0; i < 3; i++) st.brow[side][i] = m.brows[side][i];
     st.morph = st.morphT;
   } else {
     for (const key in T) { st.eyeV[key] += (170 * (T[key] - st.eye[key]) - 10 * st.eyeV[key]) * dt; st.eye[key] += st.eyeV[key] * dt; }
     for (const side of ['L', 'R']) for (let i = 0; i < 3; i++) { st.browV[side][i] += (200 * (m.brows[side][i] - st.brow[side][i]) - 11 * st.browV[side][i]) * dt; st.brow[side][i] += st.browV[side][i] * dt; }
-    spr(st, 'head', m.head || 0, 110, 8, dt);
+    spr(st, 'head', clamp((m.head || 0) + st.headTrack, -.16, .16), 110, 8, dt);
     spr(st, 'eyeScale', 1, 260, 11, dt); spr(st, 'irisScale', 1, 240, 10, dt); spr(st, 'mouthScale', 1, 240, 14, dt);
     spr(st, 'hop', 0, 200, 10, dt); spr(st, 'pop', 0, 220, 9, dt);
     spr(st, 'blushA', m.blush || 0, 120, 12, dt);
@@ -990,8 +1205,9 @@ function update(now, dt) {
   const tw = V.w * (.92 + .2 * amp), th = V.h * (.5 + 1.05 * amp), trr = V.r;
   if (still) { st.vw = tw; st.vh = th; st.vr = trr; } else { spr(st, 'vw', tw, 500, 30, dt); spr(st, 'vh', th, 500, 30, dt); spr(st, 'vr', trr, 400, 28, dt); }
 
-  // gaze: on you when she can see you, otherwise little glances around
-  if (st.trackGaze && !st.thinking && m.id !== 'thinking') {
+  // gaze: on your finger while you touch her screen, on you when she can see you, otherwise little glances around
+  if (st.touchGaze) { st.tgx = st.touchGaze[0]; st.tgy = st.touchGaze[1]; st.nextLook = now + 900; }
+  else if (st.trackGaze && !st.thinking && m.id !== 'thinking' && now > st.nextLook - 1400) {
     if (now > st.nextLook) {
       const j = still ? 0 : .12;
       st.tgx = clamp(st.trackGaze[0] + rnd(-j, j), -1, 1); st.tgy = clamp(st.trackGaze[1] + rnd(-j, j) * .6, -1, 1);
@@ -1006,15 +1222,41 @@ function update(now, dt) {
   const k = 1 - Math.exp(-dt * 14);
   st.gx += (st.tgx - st.gx) * k; st.gy += (st.tgy - st.gy) * k;
 
-  const tr = regionTarget(), rk = 1 - Math.exp(-dt * 10), r = st.region;
+  const tr = regionTarget(), rk = 1 - Math.exp(-dt * (still ? 60 : 8)), r = st.region;
   r.x += (tr.x - r.x) * rk; r.y += (tr.y - r.y) * rk; r.w += (tr.w - r.w) * rk; r.h += (tr.h - r.h) * rk;
+  if (st.dTarget) { if (!st.dregion) st.dregion = { ...st.dTarget }; const dr = st.dregion; for (const kk of ['x', 'y', 'w', 'h']) dr[kk] += (st.dTarget[kk] - dr[kk]) * rk; }
+  else if (!drawing) st.dregion = null;
+  st.hide += (st.hideT - st.hide) * (1 - Math.exp(-dt * 9));
+  idleLife(now);
+}
+
+/* ================= little bits of life when nothing's happening ================= */
+let lastActivity = performance.now(), nextIdle = performance.now() + 15000;
+function poke() { lastActivity = performance.now(); }
+function idleLife(now) {
+  if (scr.power !== 'on' || st.speaking || st.thinking || drawing || st.ovr || scr.noSignal) return;
+  if (voice.inLevel > .08 || st.base.id === 'sleepy' || st.base.id === 'crying') return;
+  if (now - lastActivity < 13000 || now - lastFaceCall < 9000 || now < nextIdle) return;
+  nextIdle = now + rnd(9000, 17000);
+  const hour = new Date().getHours(), late = hour >= 23 || hour < 6;
+  const beats = [
+    ['look', 3], ['hum', 2], ['blinks', 2], ['curious', 1], ['yawn', late ? 3 : .4], ['smirk', 1]
+  ];
+  let tot = beats.reduce((s2, b) => s2 + b[1], 0), roll = Math.random() * tot, pickB = 'look';
+  for (const [b, w] of beats) { roll -= w; if (roll <= 0) { pickB = b; break; } }
+  if (pickB === 'look') { st.tgx = -1; st.tgy = rnd(-.3, .3); st.nextLook = now + 900; setTimeout(() => { st.tgx = 1; st.nextLook = performance.now() + 900; }, 850); }
+  else if (pickB === 'hum') { react('chill', 3200, { fx: 'music' }); st.headTrack = 0; bump(.25); }
+  else if (pickB === 'blinks') { blinkNow(); setTimeout(blinkNow, 260); }
+  else if (pickB === 'curious') react('curious', 2000, { fx: 'question' });
+  else if (pickB === 'yawn') react('sleepy', 1700);
+  else if (pickB === 'smirk') react('smug', 2200);
 }
 
 /* ================= the face call (from her brain, or the Face Lab) ================= */
 let lastFaceCall = 0;
 function applyFace(p = {}) {
   const now = performance.now();
-  lastFaceCall = now;
+  lastFaceCall = now; poke();
   if (scr.power === 'off' || scr.power === 'turningOff') { if (p.screen !== 'power_off') powerOn(); }
   if (p.screen !== 'no_signal') scr.noSignal = false;
   const moodId = String(p.mood || '').toLowerCase();
@@ -1049,7 +1291,7 @@ function effect(fx) {
 }
 
 /* ================= voice (ElevenLabs) ================= */
-const dbg = { face: 0, look: 0, lastFace: null, pics: 0, picErr: '', peakOut: 0 };
+const dbg = { face: 0, look: 0, draw: 0, remember: 0, lastFace: null, lastDraw: null, pics: 0, picErr: '', peakOut: 0 };
 const voice = { conv: null, connected: false, connecting: false, mode: 'listening', inLevel: 0, outLevel: 0, outShape: 'A', muted: false, kind: '' };
 function loadScript(src) {
   return new Promise((res, rej) => {
@@ -1078,9 +1320,12 @@ async function wake() {
       agentId: (S.agentId || AGENT_ID).trim(),
       clientTools: {
         face: params => { dbg.face++; dbg.lastFace = params; applyFace(params || {}); },
-        look: params => { dbg.look++; doLook(params || {}); }
+        look: params => { dbg.look++; doLook(params || {}); },
+        draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
+        remember: params => { dbg.remember++; addMemory(params && params.fact); }
       },
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); },
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); setTimeout(sendSessionNote, 400); },
+      onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDisconnect: d => onVoiceEnd(d),
       onError: (msg) => { console.warn('voice error', msg); if (msg) showToast(String(msg).slice(0, 140)); },
       onModeChange: ({ mode }) => {
@@ -1120,8 +1365,27 @@ async function keepAwake(on) {
   } catch (e) { wakeLock = null; }
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && voice.connected) keepAwake(true); });
+/* what she knows when she wakes: the time, how long you've been gone, what she saved about you, her sketchbook */
+function ago(ms) {
+  const m = Math.round(ms / 60000);
+  if (m < 2) return 'just a minute ago'; if (m < 60) return m + ' minutes ago';
+  const h = Math.round(m / 60); if (h < 36) return h + (h === 1 ? ' hour ago' : ' hours ago');
+  const dd = Math.round(h / 24); return dd + ' days ago';
+}
+function sendSessionNote() {
+  const c = voice.conv; if (!c) return;
+  const when = new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
+  const parts = [`[note] It's ${when} for them.`];
+  parts.push(S.lastSeen ? `The last time they woke you was ${ago(Date.now() - S.lastSeen)}.` : 'This is the first time they have ever woken you up.');
+  const mem = readMemory();
+  if (mem.length) parts.push('[memory] Things you saved about them before: ' + mem.map(m => m.fact).join(' | '));
+  const book = readBook();
+  if (book.length) parts.push('[sketchbook] Drawings you made before. Bring one back with draw reuse only if you feel like it; drawing something fresh is always fine too: ' + book.map(b => b.name).join(', '));
+  try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {}
+}
 function onVoiceEnd(d) {
   keepAwake(false);
+  if (voice.connected) { S.lastSeen = Date.now(); saveSettings(); }
   const was = voice.connected;
   voice.connected = false; voice.connecting = false; voice.conv = null; voice.mode = 'listening';
   st.speaking = false; st.thinking = false; voice.outLevel = 0; voice.inLevel = 0;
@@ -1153,6 +1417,7 @@ function nextCap() {
 }
 function onVoiceMessage(msg) {
   if (!msg || !msg.message) return;
+  poke();
   const role = msg.role || (msg.source === 'ai' ? 'agent' : 'user');
   if (role === 'agent') {
     caption(msg.message.replace(/\[[^\]]*\]/g, '').trim());
@@ -1180,6 +1445,16 @@ const outBins = { lo: 0, hi: 0 };
 function sampleVoice() {
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
   try { voice.inLevel = voice.muted ? 0 : clamp(c.getInputVolume() || 0, 0, 1); } catch (e) {}
+  const now = performance.now();
+  if (voice.inLevel > .12) poke();
+  // how you sound: shouting makes her flinch, whispering makes her lean in
+  if (!st.speaking && S.react) {
+    voice.loudN = voice.inLevel > .85 ? (voice.loudN || 0) + 1 : 0;
+    if (voice.loudN === 6 && cooled('loud', 20000)) { react('shook', 1300, { screen: 'static' }); senseNote('[ears] they just got really loud'); }
+    const whisper = (voice.vad || 0) > .7 && voice.inLevel > .015 && voice.inLevel < .09;
+    voice.whisperN = whisper ? (voice.whisperN || 0) + 1 : 0;
+    if (voice.whisperN === 70 && cooled('whisper', 30000)) { react('curious', 2400, { screen: 'zoom_in' }); senseNote('[ears] they\'re whispering to you'); }
+  }
   if (!st.speaking) { voice.outLevel *= .7; return; }
   try {
     const f = c.getOutputByteFrequencyData();
@@ -1188,6 +1463,9 @@ function sampleVoice() {
       for (let i = 0; i < n; i++) { sum += f[i]; if (i < cut) lo += f[i]; else hi += f[i]; }
       const avg = sum / n / 255;
       voice.outLevel = clamp((avg - .04) * 3.2, 0, 1); dbg.peakOut = Math.max(dbg.peakOut, voice.outLevel);
+      // a little bounce on her punchy words
+      voice.outEma = lerp(voice.outEma || 0, voice.outLevel, .06);
+      if (voice.outLevel > .72 && voice.outLevel > voice.outEma + .3 && now - (voice.lastPunch || 0) > 420) { voice.lastPunch = now; bump(.32); }
       outBins.lo = lo / cut / 255; outBins.hi = hi / (n - cut) / 255;
       const ratio = outBins.hi / (outBins.lo + .001);
       voice.outShape = voice.outLevel > .7 ? 'A' : ratio > .9 ? (voice.outLevel > .4 ? 'E' : 'I') : ratio < .35 ? (voice.outLevel > .35 ? 'O' : 'U') : (voice.outLevel > .45 ? 'A' : 'C');
@@ -1202,7 +1480,10 @@ const cam = { on: false, loading: false, stream: null, video: $('#cam'), lm: nul
   present: false, seenAt: 0, lostAt: 0, baseWidth: 0, smileT: 0, yawnT: 0, leanT: 0, stareT: 0, wasAway: false, awayNoted: false, dimmed: false,
   wrist: [], gesture: '', gestT: 0, cool: {} };
 function cooled(key, ms) { const n = performance.now(); if ((cam.cool[key] || 0) > n) return false; cam.cool[key] = n + ms; return true; }
-function eyesNote(text) { if (voice.connected && voice.conv) try { voice.conv.sendContextualUpdate('[eyes] ' + text); } catch (e) {} }
+function senseNote(text) { if (voice.connected && voice.conv) try { voice.conv.sendContextualUpdate(text); } catch (e) {} }
+function eyesNote(text) { senseNote('[eyes] ' + text); }
+/* a few moments are worth her answering right away (head pats, being shaken): sent as a turn, never while she talks */
+function senseTurn(text) { if (voice.connected && voice.conv && !st.speaking) try { voice.conv.sendUserMessage(text); } catch (e) {} else senseNote(text); }
 
 async function startEyes() {
   if (cam.on || cam.loading) return;
@@ -1251,8 +1532,13 @@ function trackEyes(now) {
     const nose = lms[1], wL = lms[234], wR = lms[454], width = Math.abs(wR.x - wL.x);
     if (!cam.present) {
       const away = cam.lostAt ? (now - cam.lostAt) / 1000 : 0;
-      cam.present = true; cam.seenAt = now;
-      if (cam.wasAway && away > 5 && reactOn) {
+      cam.present = true; cam.seenAt = now; poke();
+      if (reactOn && away > .7 && away < 4 && cooled('peek', 15000)) {
+        // peekaboo
+        react('shook', 650, { screen: 'static' }); bump(1.3);
+        setTimeout(() => react('happy', 1900, { fx: 'sparkles' }), 650);
+        eyesNote('they hid their face and popped back out, peekaboo');
+      } else if (cam.wasAway && away > 5 && reactOn) {
         scr.noSignal = false;
         react('happy', 2600, { screen: away > 18 ? 'static' : 'flash' }); bump(1.2);
         eyesNote(`they came back after about ${Math.round(away)} seconds away`);
@@ -1262,6 +1548,9 @@ function trackEyes(now) {
     cam.baseWidth = cam.baseWidth ? lerp(cam.baseWidth, width, .01) : width;
     // she looks at you (mirrored, so she follows you like a person would)
     st.trackGaze = [clamp(-(nose.x - .5) * 2.6, -1, 1), clamp((nose.y - .45) * 2.4, -1, 1)];
+    // she tilts her head when you tilt yours, like a mirror
+    const eL = lms[33], eR = lms[263];
+    if (eL && eR && reactOn) { const roll = Math.atan2(eR.y - eL.y, eR.x - eL.x); st.headTrack = lerp(st.headTrack, clamp(-roll * .55, -.12, .12), .3); }
     if (reactOn) {
       const cats = (res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories) || [];
       const smile = (blend(cats, 'mouthSmileLeft') + blend(cats, 'mouthSmileRight')) / 2;
@@ -1276,6 +1565,10 @@ function trackEyes(now) {
         if (!['sad', 'crying', 'grumpy'].includes(st.base.id)) react(Math.random() < .5 ? 'happy' : 'wink', 2400);
         if (cooled('smileNote', 45000)) eyesNote('they just smiled at you');
       }
+      // you look down → she gets concerned
+      const frown = (blend(cats, 'mouthFrownLeft') + blend(cats, 'mouthFrownRight')) / 2;
+      cam.frownT = frown > .4 && smile < .2 ? (cam.frownT || 0) + 1 : 0;
+      if (cam.frownT === 22 && cooled('frown', 60000)) { react('sad', 2400); eyesNote('they look a little down right now'); }
       // surprise
       if (jaw > .35 && browUp > .55 && wide > .35 && !talkingYou && cooled('surprise', 8000)) { react('shook', 1500, { screen: 'static' }); eyesNote('they look surprised'); }
       // yawn
@@ -1293,7 +1586,7 @@ function trackEyes(now) {
     }
   } else {
     if (cam.present) { cam.present = false; cam.lostAt = now; }
-    st.trackGaze = null;
+    st.trackGaze = null; st.headTrack *= .9;
     const away = (now - cam.lostAt) / 1000;
     if (reactOn && cam.lostAt) {
       if (away > 2.5 && !cam.wasAway) { cam.wasAway = true; react('curious', 2400); st.tgx = -1; st.nextLook = now + 700; }
@@ -1352,6 +1645,173 @@ function doLook() {
   if (!cam.on) { try { voice.conv.sendUserMessage('[eyes] Their camera is off, so you can\'t see anything right now.'); } catch (e) {} applyFace({ mood: 'curious', screen: 'no_signal' }); return; }
   react('curious', 1600);
   sendPicture('[eyes] This is what you see through their camera right now.');
+}
+
+/* ================= sounds (tiny, synthesized, never over your voice) ================= */
+const sfx = (() => {
+  let ac = null;
+  const ctxA = () => { if (!S.sfx) return null; try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === 'suspended') ac.resume(); return ac; } catch (e) { return null; } };
+  const quietOK = () => !(voice.connected && voice.mode === 'listening' && voice.inLevel > .05);
+  function tone(f0, f1, dur, vol, type = 'sine', delay = 0) {
+    const a = ctxA(); if (!a) return;
+    const t = a.currentTime + delay, o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + .012); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + .03);
+  }
+  function noise(dur, vol, freq = 3000, qv = .7, delay = 0) {
+    const a = ctxA(); if (!a) return;
+    const t = a.currentTime + delay, n = Math.max(1, Math.floor(a.sampleRate * dur)), b = a.createBuffer(1, n, a.sampleRate), ch = b.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = Math.random() * 2 - 1;
+    const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+    s.buffer = b; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = qv;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(a.destination); s.start(t);
+  }
+  return {
+    unlock: () => ctxA(),
+    powerOn: () => { tone(55, 38, .35, .09); tone(3200, 9000, .5, .006); noise(.18, .04, 2500); },
+    powerOff: () => { tone(1600, 50, .32, .05); noise(.12, .03, 1800); },
+    static: () => { if (quietOK()) noise(.28, .05, 3500, .5); },
+    boop: (k = 1) => tone(620 * k, 380 * k, .1, .05),
+    coo: () => { tone(520, 760, .16, .035); tone(760, 980, .14, .03, 'sine', .14); },
+    blip: () => { if (quietOK()) tone(880, 1320, .05, .02, 'square'); },
+    scribble: sec => { if (!quietOK()) return; for (let i = 0; i < Math.min(14, sec * 8); i++) noise(.05, .016, rnd(2500, 5000), 2, i * rnd(.07, .12)); }
+  };
+})();
+
+/* ================= touch: poke, pat, rub, drag, swipe, shake ================= */
+const touch = { down: null, pokes: [], pats: [], longT: 0, motionAsked: false, lastShake: 0, shakeHits: [] };
+function faceCoords(px, py) {
+  const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
+  return [(px - cx) / s - st.gx * 1.4, (py - cy) / s - st.gy - st.hop];
+}
+function zoneAt(px, py) {
+  if (st.hide > .5 || scr.power !== 'on') return 'screen';
+  const [x, y] = faceCoords(px, py);
+  if (Math.abs(Math.abs(x) - 23) < 14 && Math.abs(y + 3) < 10) return 'eye';
+  if (Math.abs(Math.abs(x) - 31) < 10 && Math.abs(y - 9) < 7) return 'cheek';
+  if (Math.abs(x) < 10 && Math.abs(y - 16) < 7) return 'mouth';
+  if (Math.abs(x) < 42 && y < -14 && y > -42) return 'head';
+  if (Math.abs(x) < 56 && Math.abs(y) < 42) return 'face';
+  return 'screen';
+}
+function gazeAt(px, py) { const r = st.region; return [clamp((px - (r.x + r.w / 2)) / (r.w * .35), -1, 1), clamp((py - (r.y + r.h / 2)) / (r.h * .35), -1, 1)]; }
+function askMotion() {
+  if (touch.motionAsked) return; touch.motionAsked = true;
+  try { if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') DeviceMotionEvent.requestPermission().catch(() => {}); } catch (e) {}
+}
+cv.addEventListener('pointerdown', e => {
+  askMotion(); sfx.unlock(); poke();
+  const now = performance.now();
+  touch.down = { x: e.clientX, y: e.clientY, t: now, moved: 0, lastX: e.clientX, lastY: e.clientY, lastT: now, zone: zoneAt(e.clientX, e.clientY), long: false, rub: 0 };
+  try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+  st.touchGaze = gazeAt(e.clientX, e.clientY);
+  clearTimeout(touch.longT);
+  touch.longT = setTimeout(() => {
+    const d = touch.down;
+    if (d && d.moved < 12 && ['face', 'head', 'cheek'].includes(d.zone) && st.base.id !== 'sleepy') {
+      d.long = true; react('smitten', 2600); effect('hearts'); st.blushBoost = 1; sfx.coo();
+      if (cooled('pet', 15000)) senseTurn('[touch] They\'re resting their finger on your face, kind of petting you.');
+    }
+  }, 650);
+});
+cv.addEventListener('pointermove', e => {
+  const d = touch.down; if (!d) return;
+  const now = performance.now(), dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
+  d.moved += Math.hypot(dx, dy); d.lastX = e.clientX; d.lastY = e.clientY; d.lastT = now;
+  st.touchGaze = gazeAt(e.clientX, e.clientY);
+  if (d.zone === 'head' && zoneAt(e.clientX, e.clientY) === 'head' && st.base.id !== 'sleepy') {
+    d.rub += Math.abs(dx);
+    if (d.rub > 260 && !d.rubbed) { d.rubbed = true; clearTimeout(touch.longT); react('happy', 2600); effect('hearts'); st.blushBoost = 1; sfx.coo(); if (cooled('headpat', 12000)) senseTurn('[touch] They\'re rubbing your head.'); }
+  }
+});
+function endTouch(e) {
+  const d = touch.down; touch.down = null; clearTimeout(touch.longT);
+  setTimeout(() => { if (!touch.down) st.touchGaze = null; }, 700);
+  if (!d || d.long || d.rubbed) return;
+  const now = performance.now(), dur = now - d.t, dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
+  if (dist > 120 && dist / Math.max(dur, 1) > 1.1) {
+    screenCue('glitch'); react('dizzy', 1400);
+    if (cooled('swipe', 10000)) senseNote('[touch] they swiped across your screen and scrambled you for a second');
+    return;
+  }
+  if (dist > 14 || dur > 600) return;
+  tap(d.zone, e.clientX, e.clientY, now);
+}
+cv.addEventListener('pointerup', endTouch);
+cv.addEventListener('pointercancel', () => { touch.down = null; clearTimeout(touch.longT); st.touchGaze = null; });
+function tap(zone, px, py, now) {
+  touch.pokes = touch.pokes.filter(t => now - t < 3000); touch.pokes.push(now);
+  if (st.base.id === 'sleepy' && !voice.connected && zone !== 'screen') { react('shook', 700, { screen: 'static' }); sfx.boop(.8); return; }
+  if (touch.pokes.length >= 6 && cooled('pokespam', 15000)) {
+    touch.pokes = []; react('grumpy', 2800, { fx: 'anger', screen: 'glitch' }); showPop('QUIT IT'); sfx.boop(.6);
+    senseTurn('[touch] They keep poking your screen over and over.'); return;
+  }
+  sfx.boop(1);
+  if (zone === 'eye') { blinkNow(); react('flustered', 900); bump(.6); if (Math.random() < .35) showPop('HEY!'); if (cooled('eyepoke', 8000)) senseNote('[touch] they poked you right in the eye'); }
+  else if (zone === 'cheek') { st.popV += 18; st.blushBoost = 1; react(Math.random() < .5 ? 'flustered' : 'smitten', 1600); if (cooled('cheek', 8000)) senseNote('[touch] they poked your cheek'); }
+  else if (zone === 'mouth') { react('shook', 900); bump(.7); if (cooled('mouth', 8000)) senseNote('[touch] they booped you on the mouth'); }
+  else if (zone === 'head') {
+    touch.pats = touch.pats.filter(t => now - t < 1800); touch.pats.push(now);
+    if (touch.pats.length >= 3) { touch.pats = []; react('happy', 2600); effect('hearts'); st.blushBoost = .8; sfx.coo(); if (cooled('headpat', 12000)) senseTurn('[touch] They\'re patting your head.'); }
+    else { bump(.5); react('curious', 900); }
+  }
+  else if (zone === 'face') { bump(.5); blinkNow(); }
+  else { const g = gazeAt(px, py); st.tgx = g[0]; st.tgy = g[1]; st.nextLook = now + 1500; react('curious', 1100); }
+}
+addEventListener('devicemotion', e => {
+  const a = e.acceleration; if (!a || a.x == null) return;
+  const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0), now = performance.now();
+  if (m < 16) return;
+  touch.shakeHits = touch.shakeHits.filter(t => now - t < 700); touch.shakeHits.push(now);
+  if (touch.shakeHits.length >= 3 && now - touch.lastShake > 4000) {
+    touch.lastShake = now; touch.shakeHits = []; poke();
+    st.eyeOvr = 'spiral'; st.eyeOvrUntil = now + 2600; react('dizzy', 2600); screenCue('glitch');
+    if (cooled('shake', 15000)) senseTurn('[touch] They just shook their phone hard and made you dizzy.');
+  }
+});
+
+/* ================= what she remembers about you (this device only) ================= */
+const MEM_KEY = 'lumi-live:memory';
+function readMemory() { try { const m = JSON.parse(localStorage.getItem(MEM_KEY) || '[]'); return Array.isArray(m) ? m : []; } catch (e) { return []; } }
+function writeMemory(m) { try { localStorage.setItem(MEM_KEY, JSON.stringify(m.slice(-50))); } catch (e) {} renderMemory(); }
+function addMemory(fact) {
+  const f = String(fact || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!f) return;
+  const m = readMemory().filter(x => x.fact.toLowerCase() !== f.toLowerCase()); m.push({ fact: f, t: Date.now() }); writeMemory(m);
+  spawnFx('twinkle');
+}
+function listRow(text, onOpen, onDel, delLabel) {
+  const li = document.createElement('li'), sp = document.createElement('span');
+  sp.textContent = text; li.append(sp);
+  const box = document.createElement('span'); box.style.display = 'flex'; box.style.gap = '6px';
+  if (onOpen) { const b = document.createElement('button'); b.type = 'button'; b.textContent = 'SHOW'; b.addEventListener('click', onOpen); box.append(b); }
+  const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', delLabel); x.addEventListener('click', onDel); box.append(x);
+  li.append(box); return li;
+}
+function emptyRow(text) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = text; return li; }
+function renderMemory() {
+  const ul = $('#memList'); if (!ul) return; ul.textContent = '';
+  const m = readMemory();
+  $('#memLbl').textContent = 'WHAT SHE REMEMBERS (' + m.length + ')';
+  if (!m.length) ul.append(emptyRow('Nothing yet.'));
+  m.slice().reverse().forEach(item => ul.append(listRow(item.fact, null, () => writeMemory(readMemory().filter(x => x.t !== item.t || x.fact !== item.fact)), 'Forget this')));
+}
+function renderBook() {
+  const ul = $('#bookList'); if (!ul) return; ul.textContent = '';
+  const b = readBook();
+  $('#bookLbl').textContent = 'HER SKETCHBOOK (' + b.length + ')';
+  if (!b.length) ul.append(emptyRow('Empty. Ask her to draw something.'));
+  b.slice().reverse().forEach(item => ul.append(listRow(item.name, () => { closeOSD(); powerOn(); showDrawing({ reuse: item.name, motion: item.wireframe ? 'spin' : 'float' }, true); }, () => writeBook(readBook().filter(x => x.name !== item.name)), 'Remove from sketchbook')));
+}
+let forgetArmed = 0;
+function wireMemoryUI() {
+  $('#memClear').addEventListener('click', e => {
+    if (Date.now() - forgetArmed < 3500) { writeMemory([]); forgetArmed = 0; e.target.textContent = 'FORGET EVERYTHING'; showToast('She forgot everything she saved about you.'); return; }
+    forgetArmed = Date.now(); e.target.textContent = 'TAP AGAIN TO FORGET';
+    setTimeout(() => { if (Date.now() - forgetArmed >= 3400) e.target.textContent = 'FORGET EVERYTHING'; }, 3500);
+  });
+  renderMemory(); renderBook();
 }
 
 /* ================= UI ================= */
@@ -1425,6 +1885,8 @@ function toggleRow(id, key, after) {
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
 toggleRow('peekBtn', 'peek', () => { $('#peek').hidden = !(S.peek && cam.on); });
 toggleRow('reactBtn', 'react');
+toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
+wireMemoryUI();
 function renderGlow() {
   const bars = $('#glowBars');
   if (!bars.children.length) for (let i = 0; i < 10; i++) bars.append(document.createElement('i'));
@@ -1445,7 +1907,6 @@ addEventListener('keydown', e => {
   const m = MOODS.find(x => String(x.key) === e.key);
   if (m) applyFace({ mood: m.id });
 });
-cv.addEventListener('click', () => { if (!voice.connected) { bump(1); blinkNow(); } });
 
 /* level meter in the readout: your voice while she listens, hers while she talks */
 const vuEls = [...document.querySelectorAll('#vu i')];
@@ -1472,7 +1933,7 @@ if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, face: cam.present, debug: dbg }),
-  say: text => voice.conv && voice.conv.sendUserMessage(text) };
+  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap };
 requestAnimationFrame(frame);
 })();
 </script>

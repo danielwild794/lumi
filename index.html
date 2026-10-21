@@ -1133,6 +1133,7 @@ function renderOneDrawing(d, now, rect) {
     else if (d.motion === 'wobble') rot = Math.sin(age * 5) * .13;
     else if (d.motion === 'shake') { x += rnd(-1, 1) * sizePx * .015; y += rnd(-1, 1) * sizePx * .015; }
     else if (d.motion === 'grow') sc *= 1 + Math.sin(age * 2.4) * .07;
+    else if (d.motion === 'still') { sc *= 1 + Math.sin(age * 1.6) * .015; rot = Math.sin(age * .9) * .015; }
   }
   const prog = clamp((now - d.t0) / d.drawDur, 0, 1);
   const lwPx = clamp(sizePx * .016, 2, 5);
@@ -1237,7 +1238,7 @@ function renderFace(now) {
   ctx.clearRect(0, 0, fc.width, fc.height);
   const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
-  const g = S.glow / 100, faceA = (1 - clamp(st.hide, 0, 1)) * (arc ? .62 : 1);
+  const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
   const layer = (blur, alpha, withFx) => {
     if (faceA < .02) return;
     alpha *= faceA;
@@ -1366,6 +1367,13 @@ function regionTarget() {
     const b = osd.getBoundingClientRect();
     if (b.right < W * .6) R = { x: b.right + 8, y: top, w: Math.max(40, W - b.right - 8), h: R.h };
     else if (b.top > H * .25) R = { x: 0, y: top, w: W, h: Math.max(40, b.top - top - 4) };
+  }
+  // during one of her arcade games her face moves up out of the way and watches the play area
+  st.aTarget = null;
+  if (arc && !ttt) {
+    const land = R.w > R.h * 1.1;
+    if (land) { st.aTarget = { x: R.x + R.w * .3, y: R.y, w: R.w * .7, h: R.h }; return { x: R.x, y: R.y, w: R.w * .32, h: R.h }; }
+    st.aTarget = { x: R.x, y: R.y + R.h * .26, w: R.w, h: R.h * .74 }; return { x: R.x, y: R.y, w: R.w, h: R.h * .28 };
   }
   // a tic-tac-toe board takes half the screen and her face moves to the other half
   if (ttt) {
@@ -2444,7 +2452,7 @@ function hearMusic(now, c) {
     if (now - music.offSince > 6000) music.on = false;
   }
   if (music.on && !st.speaking && !dance.on && now >= music.nextBeat) {
-    music.nextBeat = Math.max(now, music.lastOnset) + music.beatMs; bump(.22);
+    music.nextBeat = Math.max(now, music.lastOnset) + music.beatMs; bump(.22); beatPulse = 1;
     if (Math.random() < .12) spawnFx('music');
   }
 }
@@ -2536,6 +2544,7 @@ function endStare(now, how, secs) {
 /* When music plays near you she grooves to its real beat, in a different style each song. She can
    also dance whenever she wants, and lay down her own drum beat from a pattern she writes. */
 const DANCES = ['bop', 'sway', 'headbang', 'bounce', 'wiggle', 'nod', 'groove'];
+let beatPulse = 0;   // jumps to 1 on every beat and fades, so game pieces and marks bop along too
 const dance = { on: false, style: 'bop', src: 'music', bpm: 104, anchor: 0, beat: -1, step: -1, until: 0, auto: false, pattern: '', last: '' };
 function startDance(p = {}) {
   const now = performance.now();
@@ -2583,7 +2592,7 @@ function danceTick(now) {
   else if (dance.style === 'bop') tilt = side * .045 * k;
   st.danceX = lerp(st.danceX, x, .35); st.danceTilt = lerp(st.danceTilt, tilt, .3);
   if (b !== dance.beat) {
-    dance.beat = b;
+    dance.beat = b; beatPulse = 1;
     if (dance.style === 'bop') bump(.35 * k);
     else if (dance.style === 'bounce') { st.hopV -= 55 * k; st.squishV -= 2.5 * k; }
     else if (dance.style === 'headbang') { st.hopV += 70 * k; st.eyeScale = .45; if (b % 4 === 0) st.popV += 8; }
@@ -2603,7 +2612,7 @@ let arc = null;
 const ARC_MOTIONS = ['still', 'float', 'bounce', 'fall', 'rise', 'drift', 'zip', 'blink', 'spin'];
 const isNum = v => v !== undefined && v !== null && v !== '' && isFinite(+v);
 const isTrue = v => v === true || v === 'true';
-function arcRect() { const r = st.region; return { x: r.x + 16, y: r.y + 44, w: Math.max(80, r.w - 32), h: Math.max(80, r.h - 60) }; }
+function arcRect() { const r = st.aTarget || st.region; return { x: r.x + 16, y: r.y + 44, w: Math.max(80, r.w - 32), h: Math.max(80, r.h - 60) }; }
 function parseList(v) {
   if (Array.isArray(v)) return v;
   if (typeof v === 'string') { try { const j = JSON.parse(v); return Array.isArray(j) ? j : (j && typeof j === 'object' ? [j] : []); } catch (e) { return []; } }
@@ -2642,6 +2651,7 @@ function piecePos(pc, now) {
     else if (pc.motion === 'blink') vis = Math.sin(age * 2.4 * pc.speed + pc.ph) > -.25;
     else if (pc.motion === 'spin') rot = age * 1.8 * pc.speed;
   }
+  if (!reduceMQ.matches) { y += Math.sin(age * 1.7 + pc.ph) * 2.5; if (pc.motion !== 'spin') rot += Math.sin(age * 1.3 + pc.ph) * .07; }
   return { x, y, rot, vis };
 }
 function arcade(p = {}) {
@@ -2728,12 +2738,25 @@ function tttAI(b) {
   const corners = [0, 2, 6, 8].filter(c => !b[c]);
   return corners.length && Math.random() < .7 ? pick(corners) : pick(free);
 }
+/* every mark is hand-drawn fresh: X strokes lean and curve a little differently, O's are loose loops
+   that overshoot, and if she drew her own piece for the game it's placed at its own little angle */
+function handX() {
+  const j = () => rnd(-.16, .16), c = () => rnd(-.22, .22);
+  return [qpts(-1 + j(), -1 + j(), c(), c(), 1 + j(), 1 + j(), 14), qpts(1 + j(), -1 + j(), c(), c(), -1 + j(), 1 + j(), 14)];
+}
+function handO() {
+  const a0 = rnd(-2.6, -1.2), sweep = TAU + rnd(.2, .55), rx = rnd(.88, 1.06), ry = rnd(.84, 1.04), ph = rnd(0, TAU), wob = rnd(.03, .08), P = [];
+  for (let i = 0; i <= 44; i++) { const a = a0 + sweep * i / 44, w = 1 + wob * Math.sin(3 * a + ph); P.push([Math.cos(a) * rx * w, Math.sin(a) * ry * w]); }
+  return [P];
+}
 function tttCall(p = {}) {
   const now = performance.now(), mv = parseInt(p.move, 10);
   if (!ttt || ttt.over) {
     arc = null; endDrawing();
     const herFirst = isTrue(p.you_start);
-    ttt = { board: Array(9).fill(''), marks: [], turn: herFirst ? 'her' : 'you', herDue: herFirst ? now + 7000 : 0, over: null, endAt: 0, t0: now, nag: 0 };
+    let herShape = null;
+    if (p.mark) { const polys = parsePath(String(p.mark)); if (polys.length) { const n = normalize(polys); herShape = n.polys.map(P => P.map(([x, y]) => [x * 2.1, y * 2.1])); } }
+    ttt = { board: Array(9).fill(''), marks: [], turn: herFirst ? 'her' : 'you', herDue: herFirst ? now + 7000 : 0, over: null, endAt: 0, t0: now, nag: 0, herShape, gph: Array.from({ length: 4 }, () => rnd(0, TAU)) };
     sfx.blip(); bump(.5);
     senseNote(`[game] Tic-tac-toe is on. They are X, you are O. Cells are 1 to 9, left to right, top to bottom. ${herFirst ? 'You go first: call game with type tictactoe and your move.' : 'They go first; when it\'s your turn you\'ll get the board.'}`);
     if (!(mv >= 1 && mv <= 9) || !herFirst) return 'started';
@@ -2745,7 +2768,8 @@ function tttCall(p = {}) {
   return 'you played ' + (i + 1);
 }
 function tttPlace(i, mark, now) {
-  ttt.board[i] = mark; ttt.marks.push({ i, mark, t0: now }); sfx.scribble(.3); bump(.25);
+  const polys = mark === 'X' ? handX() : ttt.herShape ? ttt.herShape : handO();
+  ttt.board[i] = mark; ttt.marks.push({ i, mark, t0: now, polys, ph: rnd(0, TAU), rot: mark === 'X' ? rnd(-.12, .12) : ttt.herShape ? rnd(-.3, .3) : rnd(-.2, .2), sc: rnd(.9, 1.06) }); sfx.scribble(.3); bump(.25);
   const w = tttWinner(ttt.board);
   if (w) {
     ttt.over = w; ttt.endAt = now + 3600; const bt = tttText(ttt.board);
@@ -2771,6 +2795,7 @@ function tttTap(x, y, now) {
 
 function gameTap(x, y, now) { if (ttt) return tttTap(x, y, now); if (arc) return arcTap(x, y, now); return false; }
 function gamesTick(now, dt) {
+  beatPulse *= Math.exp(-dt * 7);
   if (ttt) {
     if (ttt.over) { if (now > ttt.endAt) ttt = null; }
     else if (ttt.turn === 'her' && now > ttt.herDue) { const i = tttAI(ttt.board); senseNote(`[game] You took too long, so your hand moved on its own: O in cell ${i + 1}.`); tttPlace(i, 'O', now); }
@@ -2805,8 +2830,9 @@ function gamesTick(now, dt) {
 }
 
 /* drawing the games, in her glowing line style */
-function gText(t, x, y, px, align = 'center', alpha = 1) {
+function gText(t, x, y, px, align = 'center', alpha = 1, rot = 0) {
   ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalAlpha = clamp(alpha, 0, 1);
+  if (rot) { ctx.translate(x, y); ctx.rotate(rot); ctx.translate(-x, -y); }
   ctx.font = `${Math.round(px)}px VT323, monospace`; ctx.textAlign = align; ctx.textBaseline = 'middle';
   ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = 5 * DPR; ctx.fillText(t, x, y); ctx.restore();
 }
@@ -2829,40 +2855,62 @@ function gShape(shape, x, y, size, rot, alpha, upto = 1) {
 }
 const boxPts = (x, y, hw, hh) => [[[x - hw, y - hh], [x + hw, y - hh], [x + hw, y + hh], [x - hw, y + hh], [x - hw, y - hh]]];
 function renderGames(now) {
-  const still = reduceMQ.matches;
+  const still = reduceMQ.matches, T = now / 1000, bp = still ? 0 : beatPulse;
   if (ttt) {
     const B = tttRect();
     if (B) {
       const c = B.s / 3, g = still ? 1 : easeOut(clamp((now - ttt.t0) / 600, 0, 1)), fade = ttt.over ? 1 - clamp((now - ttt.endAt + 500) / 500, 0, 1) : 1;
-      gPath([[[B.x + c, B.y], [B.x + c, B.y + B.s]], [[B.x + 2 * c, B.y], [B.x + 2 * c, B.y + B.s]], [[B.x, B.y + c], [B.x + B.s, B.y + c]], [[B.x, B.y + 2 * c], [B.x + B.s, B.y + 2 * c]]], 3, fade, g);
+      // grid lines bow and sway a little, each on its own rhythm
+      const sw = i => still ? 0 : Math.sin(T * 1.1 + ttt.gph[i]) * 3.2 + bp * 2;
+      gPath([
+        qpts(B.x + c, B.y, B.x + c + sw(0), B.y + B.s / 2, B.x + c, B.y + B.s, 16),
+        qpts(B.x + 2 * c, B.y, B.x + 2 * c + sw(1), B.y + B.s / 2, B.x + 2 * c, B.y + B.s, 16),
+        qpts(B.x, B.y + c, B.x + B.s / 2, B.y + c + sw(2), B.x + B.s, B.y + c, 16),
+        qpts(B.x, B.y + 2 * c, B.x + B.s / 2, B.y + 2 * c + sw(3), B.x + B.s, B.y + 2 * c, 16)], 3, fade, g);
+      const win = ttt.over && ttt.over.line ? ttt.over : null, endK = win ? clamp((now - ttt.endAt + 3600) / 400, 0, 1) : 0;
       for (const m of ttt.marks) {
-        const cx = B.x + (m.i % 3 + .5) * c, cy = B.y + (Math.floor(m.i / 3) + .5) * c, r = c * .3, k = still ? 1 : easeOut(clamp((now - m.t0) / 280, 0, 1));
-        if (m.mark === 'X') gPath([[[cx - r, cy - r], [cx + r, cy + r]], [[cx + r, cy - r], [cx - r, cy + r]]], 4, fade, k);
-        else { const P = []; for (let a = 0; a <= 40; a++) { const t = -Math.PI / 2 + a / 40 * TAU; P.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r]); } gPath([P], 4, fade, k); }
+        const age = (now - m.t0) / 1000, k = still ? 1 : easeOut(clamp(age / .3, 0, 1));
+        const cx = B.x + (m.i % 3 + .5) * c, cy = B.y + (Math.floor(m.i / 3) + .5) * c;
+        let sc = (still ? 1 : backOut(clamp(age / .35, 0, 1))) * m.sc * (1 + (still ? 0 : .045 * Math.sin(age * 1.8 + m.ph)) + .14 * bp);
+        let rot = m.rot + (still ? 0 : Math.sin(age * 1.3 + m.ph) * .09), dy = still ? 0 : Math.sin(age * 1.9 + m.ph) * 3;
+        if (win && !still) {
+          if (win.line.includes(m.i)) { dy -= Math.abs(Math.sin(T * 7 + m.i)) * 10 * endK; sc *= 1 + .1 * endK; rot += Math.sin(T * 9 + m.i) * .15 * endK; }
+          else { rot += (m.mark === 'X' ? .35 : -.35) * endK; dy += 6 * endK; sc *= 1 - .12 * endK; }
+        }
+        const r = c * .3 * sc, cs = Math.cos(rot), sn = Math.sin(rot);
+        const P = m.polys.map(L => L.map(([x, y]) => [cx + (x * cs - y * sn) * r, cy + dy + (x * sn + y * cs) * r]));
+        gPath(P, 4, fade, k);
       }
-      if (ttt.over && ttt.over.line) {
-        const L = ttt.over.line, cc = i => [B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c];
-        gPath([[cc(L[0]), cc(L[2])]], 5, fade, still ? 1 : easeOut(clamp((now - ttt.endAt + 3600 - 300) / 400, 0, 1)));
+      if (win) {
+        const L = win.line, cc = i => [B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c], a = cc(L[0]), b = cc(L[2]);
+        const bow = still ? 0 : Math.sin(T * 6) * 5;
+        gPath([qpts(a[0], a[1], (a[0] + b[0]) / 2 + bow, (a[1] + b[1]) / 2 - bow, b[0], b[1], 18)], 5, fade, still ? 1 : easeOut(clamp((now - ttt.endAt + 3600 - 300) / 400, 0, 1)));
       }
-      gText(ttt.over ? (ttt.over.who === 'O' ? 'SHE WINS' : ttt.over.who === 'X' ? 'YOU WIN' : 'DRAW') : ttt.turn === 'you' ? 'YOUR MOVE' : 'HER MOVE…', B.x + B.s / 2, B.y - 18, 24, 'center', fade);
+      const label = ttt.over ? (ttt.over.who === 'O' ? 'SHE WINS' : ttt.over.who === 'X' ? 'YOU WIN' : 'DRAW') : ttt.turn === 'you' ? 'YOUR MOVE' : 'HER MOVE…';
+      gText(label, B.x + B.s / 2, B.y - 18 + (still ? 0 : Math.sin(T * 2.2) * 2.5), 24 * (1 + .1 * bp), 'center', fade, still ? 0 : Math.sin(T * 1.4) * .04);
     }
   }
   if (!arc) return;
   const R = arcRect();
-  gText(arc.title, R.x + R.w / 2, R.y - 22, 26);
-  gText('SCORE ' + arc.score, R.x + R.w, R.y - 22, 22, 'right');
-  if (arc.until) gText(Math.max(0, Math.ceil((arc.until - now) / 1000)) + 'S', R.x, R.y - 22, 22, 'left');
+  const hb = still ? 0 : Math.sin(T * 2) * 2;
+  gText(arc.title, R.x + R.w / 2, R.y - 22 + hb, 26 * (1 + .1 * bp), 'center', 1, still ? 0 : Math.sin(T * 1.3) * .035);
+  gText('SCORE ' + arc.score, R.x + R.w, R.y - 22 - hb * .6, 22 * (1 + .08 * bp), 'right');
+  if (arc.until) gText(Math.max(0, Math.ceil((arc.until - now) / 1000)) + 'S', R.x, R.y - 22 - hb * .6, 22 * (1 + .08 * bp), 'left');
   if (arc.rules && now - arc.rulesT < 7000) gText(arc.rules.toUpperCase(), R.x + R.w / 2, R.y + 4, 17, 'center', .85 * (1 - clamp((now - arc.rulesT - 6000) / 1000, 0, 1)));
   for (const pc of arc.pieces) {
     if (pc.gone || pc.back) continue;
     const P = piecePos(pc, now); if (!P.vis) continue;
     const age = (now - pc.t0) / 1000, B = pieceBox(pc);
-    let sc = still ? 1 : backOut(clamp(age / .3, 0, 1)), al = 1;
+    let sc = (still ? 1 : backOut(clamp(age / .3, 0, 1))) * (1 + (still ? 0 : .035 * Math.sin(age * 1.8 + pc.ph)) + .12 * bp), al = 1;
     if (pc.popT) { const k = clamp((now - pc.popT) / 260, 0, 1); if (pc.dying) { sc *= 1 + k * .5; al = 1 - k; } else sc *= 1 + Math.sin(k * Math.PI) * .18; }
-    if (pc.hidden && !(pc.peekUntil > now) && !pc.dying) { gPath(boxPts(P.x, P.y, 28 * sc, 28 * sc), 2.5, al); gText('?', P.x, P.y + 1, 38 * sc, 'center', al); continue; }
+    if (pc.hidden && !(pc.peekUntil > now) && !pc.dying) {
+      const cs = Math.cos(P.rot), sn = Math.sin(P.rot), h = 28 * sc;
+      gPath([[[-h, -h], [h, -h], [h, h], [-h, h], [-h, -h]].map(([x, y]) => [P.x + x * cs - y * sn, P.y + x * sn + y * cs])], 2.5, al);
+      gText('?', P.x, P.y + 1, 38 * sc, 'center', al, P.rot); continue;
+    }
     if (pc.shape) gShape(pc.shape, P.x, P.y - (pc.label ? B.fs * .35 : 0), pc.size * sc, P.rot, al, easeOut(clamp(age / .4, 0, 1)));
-    if (pc.label) gText(pc.label, P.x, pc.shape ? P.y + pc.size * sc / 2 + B.fs * .2 : P.y, B.fs * sc, 'center', al);
-    if (!pc.shape && pc.stay) gPath(boxPts(P.x, P.y, B.hw * sc, B.hh * sc), 2, al * .9);
+    if (pc.label) gText(pc.label, P.x, pc.shape ? P.y + pc.size * sc / 2 + B.fs * .2 : P.y, B.fs * sc, 'center', al, pc.shape ? 0 : P.rot * .6);
+    if (!pc.shape && pc.stay) { const cs = Math.cos(P.rot * .6), sn = Math.sin(P.rot * .6), hw = B.hw * sc, hh = B.hh * sc; gPath([[[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh], [-hw, -hh]].map(([x, y]) => [P.x + x * cs - y * sn, P.y + x * sn + y * cs])], 2, al * .9); }
   }
   for (const f of arc.floaters) { const k = (now - f.t0) / 900; gText(f.text, f.x, f.y - k * 42, 26, 'center', 1 - k); }
 }
@@ -3089,7 +3137,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
+  dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();
 </script>

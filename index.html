@@ -201,6 +201,7 @@ body.bare .toast{opacity:.9}
         </div>
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">MEDIA VOLUME, NOT CALL</span><button id="mediaVolBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
@@ -282,7 +283,8 @@ function wpick(list) { const tot = list.reduce((s2, x) => s2 + Math.max(0, x[0])
 const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true }, readSettings());
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true, mediaVol: IS_ANDROID, herVol: 1 }, readSettings());
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -1672,6 +1674,16 @@ async function wake(force) {
         dance: params => { dbg.dance = (dbg.dance || 0) + 1; return danceCall(params || {}); },
         arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; return arcade(params || {}); },
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
+        volume: params => {
+          params = params || {}; let v = S.herVol == null ? 1 : S.herVol;
+          const lv = Number(params.level);
+          if (isFinite(lv) && params.level !== undefined && params.level !== '') v = lv > 1 ? lv / 100 : lv;
+          else if (/quiet|down|soft|low|whisper/i.test(String(params.change || ''))) v *= .6;
+          else if (/loud|up|high|max/i.test(String(params.change || ''))) v = Math.min(1, v / .6);
+          S.herVol = clamp(v, .05, 1); saveSettings();
+          try { voice.conv && voice.conv.setVolume({ volume: S.herVol }); } catch (e) {}
+          dbg.vol = S.herVol;
+        },
         eyes: params => {
           dbg.eyes = (dbg.eyes || 0) + 1; dbg.lastEyes = params; params = params || {};
           const close = params.open === false || /close|off|shut|stop/i.test(String(params.action || ''));
@@ -1726,7 +1738,8 @@ async function wake(force) {
     }
     if (stale()) { try { await conv.endSession(); } catch (e) {} return; }
     voice.conv = conv; voice.connected = true; voice.connecting = false;
-    if (voice.muted) try { conv.setMicMuted(true); } catch (e) {}
+    voice.micSent = false; applyMic();
+    if (S.herVol < 1) try { conv.setVolume({ volume: S.herVol }); } catch (e) {}
     renderPanel();
   } catch (e) {
     if (stale()) return;
@@ -1959,7 +1972,7 @@ function cutIn(now) {
   cutin.last = now; cutin.holding = true; cutin.t0 = now; cutin.spoke = false; cutin.nudged = false;
   const so = cutin.text.trim().slice(-240);
   senseNote(`[cut-in] They're still mid-sentence and you can't hold it in, so you're cutting them off right now. What they've said so far: "${so}". Butt in with a few words like a real friend would: "wait wait wait", finishing their sentence for them, objecting, a gasp, a tease. If their unfinished words then show up again as their own message, don't answer them a second time.`);
-  try { c.setMicMuted(true); } catch (e) {}
+  applyMic();
   react(pick(['shook', 'curious', 'smug', 'unimpressed']), 900); bump(.5);
 }
 function cutTick(now) {
@@ -1970,10 +1983,60 @@ function cutTick(now) {
     cutin.nudged = true; try { voice.conv.sendUserMessage(`[cut-in] Jump in now. They were saying: "${cutin.text.trim().slice(-200)}"`); } catch (e) {}
   }
   const done = (cutin.spoke && !st.speaking) || now - cutin.t0 > 9000 || (!cutin.spoke && now - cutin.t0 > 5000);
-  if (done) { cutin.holding = false; cutin.text = ''; cutin.since = 0; if (voice.conv && !voice.muted) try { voice.conv.setMicMuted(false); } catch (e) {} }
+  if (done) { cutin.holding = false; cutin.text = ''; cutin.since = 0; applyMic(); }
+}
+/* her voice on media volume, not call volume. Android flips a page into "call mode" (call volume, which never goes
+   very low) whenever it uses the phone's built-in echo canceller. So on Android the mic opens without it, and the page
+   handles her echo itself: while she talks the mic pauses, unless you're clearly talking over her, then it lets you in. */
+const rawMic = { an: null, buf: null, src: null };
+(() => {
+  const md = navigator.mediaDevices; if (!md || !md.getUserMedia) return;
+  const orig = md.getUserMedia.bind(md);
+  md.getUserMedia = async c => {
+    if (c && c.audio && S.mediaVol) {
+      const a = typeof c.audio === 'object' ? Object.assign({}, c.audio) : {};
+      a.echoCancellation = false; a.noiseSuppression = false; a.autoGainControl = false; delete a.voiceIsolation;
+      c = Object.assign({}, c, { audio: a });
+    }
+    const st_ = await orig(c);
+    if (c && c.audio && st_.getAudioTracks().length) tapMic(st_);
+    return st_;
+  };
+})();
+function tapMic(stream) {
+  try {
+    if (!rawMic.ctx) rawMic.ctx = new AudioContext();
+    if (rawMic.src) try { rawMic.src.disconnect(); } catch (e) {}
+    rawMic.an = rawMic.ctx.createAnalyser(); rawMic.an.fftSize = 512; rawMic.buf = new Float32Array(512);
+    rawMic.src = rawMic.ctx.createMediaStreamSource(stream); rawMic.src.connect(rawMic.an);
+  } catch (e) {}
+}
+function rawLevel() {
+  if (!rawMic.an) return 0;
+  rawMic.an.getFloatTimeDomainData(rawMic.buf);
+  let s2 = 0; for (let i = 0; i < rawMic.buf.length; i++) s2 += rawMic.buf[i] * rawMic.buf[i];
+  return clamp(Math.sqrt(s2 / rawMic.buf.length) * 5, 0, 1);
+}
+const gate = { on: false, barged: false, n: 0, k: .6 };
+function echoGate(now) {
+  if (!S.mediaVol || !voice.conv || !voice.connected) { gate.on = false; return; }
+  const talking = st.speaking || now - (voice.lastSpoke || 0) < 280;
+  if (talking && !gate.barged) {
+    gate.on = true;
+    const r = rawLevel(), o = voice.outLevel;
+    // learn how much of her own voice leaks back into the mic (drifts down fast, up slowly)
+    if (o > .08) { const ratio = r / o; gate.k = ratio < gate.k ? lerp(gate.k, ratio, .08) : lerp(gate.k, ratio, .004); }
+    const over = r > Math.max(.08, gate.k * o * 2.6 + .05);
+    gate.n = over ? gate.n + 1 : Math.max(0, gate.n - 2);
+    if (gate.n > 14) { gate.barged = true; gate.on = false; gate.n = 0; }   // they're talking over her: let them through
+  } else if (!talking) { gate.on = false; gate.barged = false; gate.n = 0; }
+}
+function applyMic() {
+  const want = !!(voice.muted || cutin.holding || gate.on);
+  if (voice.conv && want !== voice.micSent) { voice.micSent = want; try { voice.conv.setMicMuted(want); } catch (e) {} }
 }
 function cueTick(now) {
-  cutTick(now);
+  cutTick(now); echoGate(now); applyMic();
   if (!pendingCue) return;
   if (!voice.connected || !voice.conv) { pendingCue = null; return; }
   if (now - pendingCue.t > 6500) { senseNote(pendingCue.text); pendingCue = null; return; }
@@ -3316,8 +3379,7 @@ $('#powerKey').addEventListener('click', () => { voice.connected ? sleep() : wak
 $('#eyesKey').addEventListener('click', () => { cam.on ? stopEyes() : startEyes('front'); });
 $('#showKey').addEventListener('click', () => { if (voice.connected && cam.on) { react('curious', 1800); sendPicture('Look at this.'); } });
 $('#micKey').addEventListener('click', () => {
-  voice.muted = !voice.muted;
-  try { voice.conv && voice.conv.setMicMuted(voice.muted); } catch (e) {}
+  voice.muted = !voice.muted; applyMic();
   renderPanel();
 });
 
@@ -3359,6 +3421,7 @@ function toggleRow(id, key, after) {
 }
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
 toggleRow('bareBtn', 'bare', applyBare);
+toggleRow('mediaVolBtn', 'mediaVol', () => showToast('Takes effect next time she wakes up.'));
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });

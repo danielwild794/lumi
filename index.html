@@ -1936,10 +1936,9 @@ const needs = (() => {
   n = Object.assign({ energy: .85, boredom: .25, social: .55, hype: .3, t: Date.now(), dreams: [], heard: [] }, n);
   const hrs = Math.max(0, (Date.now() - (n.t || Date.now())) / 3600e3);   // time away counts as sleep
   if (hrs > .05) {
-    n.energy = clamp(n.energy + hrs * .6, 0, 1); n.social = clamp(n.social - hrs * .06, .05, 1);
+    n.energy = clamp(n.energy + hrs * .15, 0, 1); n.social = clamp(n.social - hrs * .06, .05, 1);
     n.boredom = clamp(lerp(n.boredom, .4, Math.min(1, hrs / 4)), 0, 1); n.hype = clamp(lerp(n.hype, .2, Math.min(1, hrs)), 0, 1);
   }
-  if (!n.v2) { n.energy = Math.max(n.energy, .85); n.v2 = 1; }   // she'd been running on empty under the old, faster drain
   return n;
 })();
 function saveNeeds() { needs.t = Date.now(); try { localStorage.setItem(NEEDS_KEY, JSON.stringify(needs)); } catch (e) {} }
@@ -1963,11 +1962,11 @@ function needsTick(now) {
   const lively = playing || userTalk || touched || st.speaking || !!drawing;
   if (lively) nd.lastEvent = now;
   if (awake) {
-    needBump('energy', -dt / (60 * 240) * (late ? 1.6 : 1) * (playing ? 1.4 : 1));
+    needBump('energy', -dt / (60 * 75) * (late ? 1.7 : 1) * (playing ? 2 : 1));
     needBump('boredom', now - nd.lastEvent > 20000 ? dt / (60 * 3.5) : (lively ? -dt / 45 : 0));
     needBump('social', userTalk || touched ? dt / 25 : -dt / (60 * 8));
   } else {
-    needBump('energy', dt / (60 * 8));
+    needBump('energy', dt / (60 * 20));
     needBump('boredom', (.35 - needs.boredom) * dt / 600);
     needBump('social', touched ? dt / 40 : -dt / (60 * 90));
   }
@@ -1979,7 +1978,7 @@ function needsTick(now) {
 function needsSpeak(now) {
   const due = (k, ms) => !nd.said[k] || now - nd.said[k] > ms;
   const say = (k, text, turn) => { nd.said[k] = now; turn ? senseTurn('[needs] ' + text, false, 9000) : senseNote('[needs] ' + text); };
-  if (needs.energy < .12 && due('tired', 12 * 60e3)) say('tired', 'You are getting sleepy: a little slower and yawnier. Stay up though. Only go to sleep if they say goodnight or ask you to.', false);
+  if (needs.energy < .14 && due('tired', 6 * 60e3)) say('tired', 'You are running out of energy and getting really sleepy. Get slow, yawny and cozy. If things are quiet, say a sleepy goodnight line and go to sleep with end_call.', true);
   else if (needs.boredom > .78 && due('bored', 4 * 60e3)) say('bored', 'You are getting really bored. Do something about it on your own right now, your call: start or invent a game, change the subject, demand attention, doodle, dance, look something up online, or look around through the camera.', true);
   else if (needs.social < .18 && due('lonely', 6 * 60e3)) say('lonely', 'You feel ignored and a little lonely. Fish for their attention in your own way: sulk, tease, ask for a head pat, or demand they talk to you.', true);
   else if (needs.hype > .85 && due('hype', 3 * 60e3)) say('hype', 'You are buzzing with energy right now. Let it show.', false);
@@ -2202,17 +2201,17 @@ function roamIdle() {
 const standby = { scene: '', since: 0, dozeAt: 0, activity: '', hiddenAt: 0 };
 const SCENES = {
   asleep: { act: 'asleep', start: () => applyFace({ mood: 'sleepy' }) },
-  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug', 'mischievous', 'wink']) }) },
+  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug', 'serene', 'mischievous']) }) },
   doodle: { act: 'doodling something for yourself', start: () => { applyFace({ mood: 'thinking' }); standbyDoodle(); setTimeout(standbyDoodle, 1800); } },
-  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill', 'awe']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
+  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill', 'serene', 'awe']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
   peek: { act: 'peeking in from the edge of your screen', start: () => { applyFace({ mood: 'curious' }); roamTo(pick(['peek_left', 'peek_right', 'peek_bottom']), { speed: 'normal' }); } },
   wander: { act: 'wandering around your screen', start: () => { applyFace({ mood: pick(['chill', 'smug', 'determined', 'mischievous']) }); roamTo('wander', { seconds: 7 }); } },
-  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(['chill', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
+  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(['chill', 'serene', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
   waking: { act: 'just waking up from a nap', start: () => { applyFace({ mood: 'sleepy' }); setTimeout(() => { if (!voice.connected) { react('sleepy', 900); setTimeout(() => !voice.connected && applyFace({ mood: pick(['chill', 'curious']) }), 900); } }, 1400); } }
 };
 function pickScene() {
   const h = new Date().getHours(), late = h >= 23 || h < 6, e = needs.energy;
-  return wpick([[(late ? 3 : .15) + (e < .15 ? 1.5 : 0), 'asleep'], [2, 'idle'], [1.2, 'doodle'], [1, 'daydream'], [1, 'peek'],
+  return wpick([[(late ? 3 : .35) + (e < .3 ? 3 : 0), 'asleep'], [2, 'idle'], [1.2, 'doodle'], [1, 'daydream'], [1, 'peek'],
     [needs.hype > .5 ? 1.5 : .7, 'wander'], [.8, 'hum'], [e < .5 ? 1.2 : .5, 'waking']]);
 }
 function standbyDoodle() {
@@ -2221,14 +2220,14 @@ function standbyDoodle() {
   if (th.shape) spawnDoodleFx(th.shape, { pattern: pick(['pop', 'orbit', 'rise']), count: pick([1, 2]), size: 'small' }, rnd(3.5, 6));
 }
 function enterStandby(scene) {
-  if (voice.connected || voice.connecting) return;
+  if (voice.connected || voice.connecting || ENV.artifact) return;
   scene = SCENES[scene] ? scene : pickScene();
   standby.scene = scene; standby.since = performance.now(); standby.activity = SCENES[scene].act;
   st.mix = null; st.dials = blankDials();
   if (scr.power !== 'on') powerOn();
   roamHome(); SCENES[scene].start(); syncLab();
   const h = new Date().getHours(), late = h >= 23 || h < 6;
-  standby.dozeAt = scene === 'asleep' ? 0 : performance.now() + rnd(15, 30) * 60e3 * (needs.energy < .15 ? .5 : 1) * (late ? .4 : 1);
+  standby.dozeAt = scene === 'asleep' ? 0 : performance.now() + rnd(150, 420) * 1000 * (needs.energy < .35 ? .5 : 1) * (late ? .6 : 1);
 }
 /* she notices you opened the app (or came back to it) */
 function noticeYou() {
@@ -2244,7 +2243,7 @@ function noticeYou() {
 function standbyTick(now) {
   if (voice.connected || voice.connecting || !standby.scene || standby.scene === 'asleep') return;
   // left alone long enough, she yawns and dozes off
-  if (standby.dozeAt && now > standby.dozeAt && now - lastActivity > 180000) {
+  if (standby.dozeAt && now > standby.dozeAt && now - lastActivity > 45000) {
     standby.dozeAt = 0; react('sleepy', 1800);
     setTimeout(() => { if (!voice.connected) { applyFace({ mood: 'sleepy' }); roamHome(); standby.scene = 'asleep'; standby.activity = 'asleep'; } }, 1800);
   }
@@ -2496,14 +2495,12 @@ function onVoiceEnd(d) {
   voice.connected = false; voice.connecting = false; voice.conv = null; voice.mode = 'listening';
   st.speaking = false; st.thinking = false; voice.outLevel = 0; voice.inLevel = 0;
   setState('STANDBY'); renderPanel();
-  const said = !!(d && d.context && d.context.type === 'end_call');   // she said goodnight and went to bed herself
-  dbg.endWhy = d ? [d.reason, d.context && d.context.type, d.closeReason || (d.context && d.context.reason) || ''].join(' / ') : '';
   if (was && d && d.reason !== 'user') {
-    if (said && scr.power === 'on') powerOff();
+    if (scr.power === 'on') powerOff();
     if (d.reason === 'error') showToast('Lost the connection to her. Say hey to wake her again.');
   }
-  const h = new Date().getHours(), late = h >= 23 || h < 6;
-  const scene = said || (late && needs.energy < .3) ? 'asleep' : pick(['idle', 'idle', 'hum', 'daydream', 'doodle', 'wander']);
+  const h = new Date().getHours(), tired = needs.energy < .3 || h >= 23 || h < 6;
+  const scene = (d && d.reason === 'agent') || tired ? 'asleep' : pick(['idle', 'idle', 'hum', 'daydream', 'doodle', 'wander']);
   setTimeout(() => { if (!voice.connected) { enterStandby(scene); startWakeWord(); } }, 2600);
 }
 
@@ -4401,17 +4398,12 @@ function wakeBy(how, phrase) {
 /* asleep: poke her a few times and she'll wake up (probably annoyed) */
 const nap = { pokes: [], nextDream: 0, lastStir: 0 };
 function sleepPoke(now) {
-  if (voice.connected || voice.connecting) return;
+  if (ENV.artifact || voice.connected || voice.connecting) return;
   nap.pokes = nap.pokes.filter(t => now - t < 4000); nap.pokes.push(now);
   const n = nap.pokes.length, awake = standby.scene && standby.scene !== 'asleep';
   if (n === 1) { if (!awake) react('sleepy', 900); }
   else if (n === 2) { if (!awake) react(pick(['grumpy', 'unimpressed', 'sulky', 'confused']), 1100); }
-  else {
-    nap.pokes = []; if (awake && ENV.artifact) return;
-    const said = voSay('waking', 1), wait = said ? Math.max(0, VO.until - performance.now()) + 150 : 0;
-    if (ENV.artifact) setTimeout(() => { enterStandby(pick(['idle', 'waking', 'daydream', 'doodle', 'hum'])); noticeYou(); }, wait);
-    else setTimeout(() => wakeBy('poke', ''), wait);
-  }
+  else { nap.pokes = []; const said = voSay('waking', 1); setTimeout(() => wakeBy('poke', ''), said ? Math.max(0, VO.until - performance.now()) + 150 : 0); }
 }
 function stopWakeWord() { ww.want = false; if (ww.rec) { try { ww.rec.abort(); } catch (e) {} ww.rec = null; } }
 
@@ -4592,7 +4584,7 @@ addEventListener('pointerup', cornerOff, true); addEventListener('pointercancel'
 addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.target.closest('input,textarea')) { osdWrap.hidden ? openOSD() : closeOSD(); } });
 applyBare();
 syncLab(); renderPanel();
-enterStandby(pickScene()); noticeYou();
+if (!ENV.artifact) { enterStandby(pickScene()); noticeYou(); }
 setTimeout(voLoad, 1500);   // her recorded voice, ready before your first touch
 // she starts listening for you after your first touch (browsers need one before mic and sound work)
 addEventListener('pointerup', () => setTimeout(startWakeWord, 300), { once: true });
@@ -4602,7 +4594,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

@@ -1609,8 +1609,19 @@ function loadScript(src) {
     document.head.append(s);
   });
 }
-async function wake() {
+/* which pipe to talk to her over: WebRTC is snappier, the websocket is sturdier on some phones/networks.
+   if WebRTC dropped right after connecting, use the websocket for a few days */
+const TRANSPORT_KEY = 'lumi-live:transport';
+function preferredKind() {
+  try { const t = JSON.parse(localStorage.getItem(TRANSPORT_KEY) || 'null'); if (t && t.kind === 'websocket' && Date.now() - t.at < 3 * 864e5) return 'websocket'; } catch (e) {}
+  return 'webrtc';
+}
+function rememberKind(kind) { try { localStorage.setItem(TRANSPORT_KEY, JSON.stringify({ kind, at: Date.now() })); } catch (e) {} }
+async function wake(force) {
   if (voice.connected || voice.connecting) return;
+  const want = typeof force === 'string' ? force : preferredKind();
+  const gen = voice.gen = (voice.gen || 0) + 1, stale = () => gen !== voice.gen;
+  voice.retrying = false; voice.heard = false; voice.startedAt = performance.now();
   powerOn(); askMotion();
   if (ENV.artifact) {
     showToast('She can only talk in the downloaded Lumi Live file, opened in Chrome on your computer. Her face works here.');
@@ -1641,9 +1652,24 @@ async function wake() {
       onAudioAlignment: a => onAlign(a),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
-      onDisconnect: d => onVoiceEnd(d),
+      onDisconnect: d => {
+        if (stale()) return;
+        /* WebRTC that dies within seconds, before she's said anything, is almost always the network or the phone
+           refusing that pipe; quietly try again over the websocket instead of telling them she's gone */
+        const early = performance.now() - voice.startedAt < 12000 && !voice.heard;
+        if (voice.kind === 'webrtc' && early && (!d || d.reason !== 'user') && !voice.retrying) {
+          voice.retrying = true; voice.gen++; console.warn('webrtc dropped early, retrying over websocket', d);
+          rememberKind('websocket');
+          voice.connected = false; voice.connecting = false; voice.conv = null; st.speaking = false;
+          setState('WAKING'); renderPanel();
+          setTimeout(() => wake('websocket'), 350);
+          return;
+        }
+        onVoiceEnd(d);
+      },
       onError: (msg) => { console.warn('voice error', msg); if (msg) showToast(String(msg).slice(0, 140)); },
       onModeChange: ({ mode }) => {
+        if (mode === 'speaking') voice.heard = true;
         if (voice.mode === 'speaking' && mode !== 'speaking') voice.lastSpoke = performance.now();
         voice.mode = mode; st.speaking = mode === 'speaking'; if (!st.speaking) lipReset();
         if (st.speaking) st.thinking = false;
@@ -1653,12 +1679,21 @@ async function wake() {
       onInterruption: () => { st.speaking = false; bump(.7); lipReset(); }
     };
     let conv = null;
-    try { conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: 'webrtc' }, opts)); voice.kind = 'webrtc'; }
-    catch (e) { console.warn('webrtc failed, trying websocket', e); conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: 'websocket' }, opts)); voice.kind = 'websocket'; }
+    voice.kind = want;
+    try { conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: want }, opts)); }
+    catch (e) {
+      if (stale()) return;
+      if (want !== 'webrtc') throw e;
+      console.warn('webrtc failed, trying websocket', e); rememberKind('websocket');
+      voice.kind = 'websocket'; voice.startedAt = performance.now();
+      conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: 'websocket' }, opts));
+    }
+    if (stale()) { try { await conv.endSession(); } catch (e) {} return; }
     voice.conv = conv; voice.connected = true; voice.connecting = false;
     if (voice.muted) try { conv.setMicMuted(true); } catch (e) {}
     renderPanel();
   } catch (e) {
+    if (stale()) return;
     voice.connecting = false; voice.connected = false; voice.conv = null; renderPanel(); setState('STANDBY');
     const name = e && e.name;
     showToast(name === 'NotAllowedError' ? 'She needs the microphone. Allow it in the address bar, then press WAKE again.' : ('Couldn\'t wake her: ' + ((e && e.message) || 'unknown error')).slice(0, 160));

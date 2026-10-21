@@ -198,6 +198,11 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
         <p class="note" id="wakeNote">While she's asleep, your browser listens for her name. In Chrome that listening goes through Google's speech service. Weather uses your rough location only to look up the forecast; she only gets told the weather.</p>
         <div class="sec">
+          <span class="lbl">HER LIFE</span>
+          <ul class="mem" id="lifeList"></ul>
+          <p class="note">Her mood of the day, what she's into lately and what she calls you are all her picks.</p>
+        </div>
+        <div class="sec">
           <span class="lbl" id="memLbl">WHAT SHE REMEMBERS</span>
           <ul class="mem" id="memList"></ul>
           <button id="memClear" type="button">FORGET EVERYTHING</button>
@@ -312,7 +317,7 @@ const st = {
   blushA: 0, blushAV: 0, blushBoost: 0,
   vw: 4.2, vwV: 0, vh: 0, vhV: 0, vr: 0, vrV: 0, visKey: 'rest', nextVis: 0,
   morph: 0, morphV: 0, morphT: 0, morphShape: 'heart', morphUntil: 0, eyeOvr: null, eyeOvrUntil: 0,
-  listenLift: 0, thinking: false, headTrack: 0, squish: 1, squishV: 0, squishT: 1, squishHold: false, tiltHead: 0, hide: 0, hideT: 0, touchGaze: null,
+  listenLift: 0, thinking: false, headTrack: 0, squish: 1, squishV: 0, squishT: 1, squishHold: false, tiltHead: 0, hide: 0, hideT: 0, touchGaze: null, danceX: 0, danceTilt: 0,
   region: { x: 0, y: 0, w: innerWidth, h: innerHeight }, dregion: null, dTarget: null,
   // face parts she invents and draws herself; each slot replaces that part of her face for a while
   cust: { eyeL: null, eyeR: null, browL: null, browR: null, mouth: null, extras: null }
@@ -1232,13 +1237,13 @@ function renderFace(now) {
   ctx.clearRect(0, 0, fc.width, fc.height);
   const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
-  const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
+  const g = S.glow / 100, faceA = (1 - clamp(st.hide, 0, 1)) * (arc ? .62 : 1);
   const layer = (blur, alpha, withFx) => {
     if (faceA < .02) return;
     alpha *= faceA;
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
-    ctx.translate(ox, oy); ctx.rotate(st.head);
+    ctx.translate(ox + st.danceX, oy); ctx.rotate(st.head + st.danceTilt);
     ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
@@ -1262,6 +1267,7 @@ function renderFace(now) {
     }
   }
   renderDrawings(now);
+  renderGames(now);
 }
 
 function composite(now) {
@@ -1360,6 +1366,12 @@ function regionTarget() {
     const b = osd.getBoundingClientRect();
     if (b.right < W * .6) R = { x: b.right + 8, y: top, w: Math.max(40, W - b.right - 8), h: R.h };
     else if (b.top > H * .25) R = { x: 0, y: top, w: W, h: Math.max(40, b.top - top - 4) };
+  }
+  // a tic-tac-toe board takes half the screen and her face moves to the other half
+  if (ttt) {
+    const land = R.w > R.h * 1.1;
+    if (land) { st.bTarget = { x: R.x + R.w * .48, y: R.y, w: R.w * .52, h: R.h }; return { x: R.x, y: R.y, w: R.w * .5, h: R.h }; }
+    st.bTarget = { x: R.x, y: R.y + R.h * .36, w: R.w, h: R.h * .64 }; return { x: R.x, y: R.y, w: R.w, h: R.h * .38 };
   }
   // when she draws, her face steps aside to make room for it
   const d = drawing && !drawing.outT0 ? drawing : null;
@@ -1613,7 +1625,10 @@ async function wake() {
         remember: params => { dbg.remember++; addMemory(params && params.fact); },
         diary: params => { dbg.diary = (dbg.diary || 0) + 1; addDiary(params && params.entry); },
         game: params => { dbg.game = (dbg.game || 0) + 1; startGame(params || {}); },
-        sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); }
+        sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); },
+        dance: params => { dbg.dance = (dbg.dance || 0) + 1; return danceCall(params || {}); },
+        arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; return arcade(params || {}); },
+        life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); }
       },
       onAudioAlignment: a => onAlign(a),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
@@ -1676,6 +1691,7 @@ function sendSessionNote() {
   if (diary.length) parts.push('[diary] The last thing you wrote in your diary: ' + diary[diary.length - 1].text);
   if (weatherNow) parts.push('[note] Weather where they are right now: ' + weatherNow + '.');
   const book = readBook();
+  try { parts.push(lifeNote(lifeOnWake())); } catch (e) {}
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
   try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {}
 }
@@ -2176,6 +2192,7 @@ const pdist = () => { const v = [...touch.pts.values()]; return Math.hypot(v[0].
 cv.addEventListener('pointerdown', e => {
   askMotion(); sfx.unlock(); poke();
   const now = performance.now();
+  if (gameTap(e.clientX, e.clientY, now)) return;
   try { cv.setPointerCapture(e.pointerId); } catch (er) {}
   touch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touch.pts.size === 2) {   // two fingers: squish or stretch her face
@@ -2324,7 +2341,7 @@ function wireMemoryUI() {
     forgetArmed = Date.now(); e.target.textContent = 'TAP AGAIN TO FORGET';
     setTimeout(() => { if (Date.now() - forgetArmed >= 3400) e.target.textContent = 'FORGET EVERYTHING'; }, 3500);
   });
-  renderMemory(); renderBook(); renderDiary();
+  renderMemory(); renderBook(); renderDiary(); renderLife();
 }
 
 /* ================= sounds she composes herself ================= */
@@ -2416,16 +2433,17 @@ function hearMusic(now, c) {
     if (!music.on) {
       music.on = true; music.nextBeat = music.lastOnset + med;
       react(pick(['happy', 'chill', 'wink', 'starry', 'smug']), 2200, { fx: 'music' });
+      const moves = S.react && !dance.on && !arc && !ttt ? startDance({ auto: true }) : '';
       if (cooled('music', 180000)) {
         const feel = music.bpm > 140 ? 'fast and hype' : music.bpm > 110 ? 'upbeat' : music.bpm > 90 ? 'groovy, mid-tempo' : 'slow and chill';
-        senseTurn(`[ears] there's music playing near them now, it sounds ${feel}`);
+        senseTurn(`[ears] there's music playing near them now, it sounds ${feel}${moves ? `, and your body started dancing to it on its own (${moves})` : ''}`);
       }
     }
   } else if (music.on) {
     if (!music.offSince) music.offSince = now;
     if (now - music.offSince > 6000) music.on = false;
   }
-  if (music.on && !st.speaking && now >= music.nextBeat) {
+  if (music.on && !st.speaking && !dance.on && now >= music.nextBeat) {
     music.nextBeat = Math.max(now, music.lastOnset) + music.beatMs; bump(.22);
     if (Math.random() < .12) spawnFx('music');
   }
@@ -2456,6 +2474,7 @@ const RPS = { Closed_Fist: 'rock', Open_Palm: 'paper', Victory: 'scissors' };
 function gameTurn(text) { senseTurn('[game] ' + text, true); }
 function startGame(p) {
   const type = String(p.type || '').toLowerCase();
+  if (type === 'tictactoe' || type === 'tic_tac_toe') return tttCall(p);
   if (game) return;
   if (!cam.on || !cam.lm) { gameTurn('You can\'t play that right now: their camera is off, so you can\'t see them. Ask them to open your eyes first.'); return; }
   const now = performance.now();
@@ -2511,6 +2530,392 @@ function endStare(now, how, secs) {
     applyFace({ mood: 'smug', effect: 'sparkles' });
     gameTurn(`Staring contest: ${how === 'looked away' ? 'they looked away' : 'they blinked'} first after ${secs} seconds. You won.`);
   }
+}
+
+/* ================= she dances ================= */
+/* When music plays near you she grooves to its real beat, in a different style each song. She can
+   also dance whenever she wants, and lay down her own drum beat from a pattern she writes. */
+const DANCES = ['bop', 'sway', 'headbang', 'bounce', 'wiggle', 'nod', 'groove'];
+const dance = { on: false, style: 'bop', src: 'music', bpm: 104, anchor: 0, beat: -1, step: -1, until: 0, auto: false, pattern: '', last: '' };
+function startDance(p = {}) {
+  const now = performance.now();
+  const style = DANCES.includes(p.style) ? p.style : pick(DANCES.filter(x => x !== dance.last));
+  const useMusic = music.on && !(+p.bpm);
+  Object.assign(dance, {
+    on: true, style, last: style, auto: !!p.auto, src: useMusic ? 'music' : 'own',
+    bpm: clamp(+p.bpm || (useMusic ? music.bpm : 104), 60, 180), anchor: useMusic ? music.lastOnset : now, beat: -1, step: -1,
+    until: now + clamp(+p.seconds || (useMusic ? 900 : 16), 3, 900) * 1000,
+    pattern: String(p.beat || '').toUpperCase().replace(/[^KSHCTX.\-]/g, '').slice(0, 32)
+  });
+  bump(.6);
+  return style;
+}
+function stopDance() { dance.on = false; dance.auto = false; }
+function danceCall(p) {
+  if (p.action === 'stop' || p.stop === true || p.stop === 'true') { stopDance(); return 'stopped'; }
+  return 'dancing: ' + startDance(p);
+}
+// her drum kit: K kick, S snare, H hi-hat, C crash, T tom, X clap
+function drum(ch) {
+  if (ch === 'K') sfx.note(150, 42, .16, .22, 'sine');
+  else if (ch === 'S') { sfx.hit(.12, .09, 1900); sfx.note(220, 160, .07, .05, 'triangle'); }
+  else if (ch === 'H') sfx.hit(.035, .035, 8000);
+  else if (ch === 'C') sfx.hit(.6, .05, 6000);
+  else if (ch === 'T') sfx.note(240, 110, .16, .13, 'sine');
+  else if (ch === 'X') { sfx.hit(.05, .07, 2400); sfx.hit(.04, .05, 1600, .012); }
+}
+function danceTick(now) {
+  if (!dance.on) { if (st.danceX || st.danceTilt) { st.danceX *= .85; st.danceTilt *= .85; if (Math.abs(st.danceX) < .01) st.danceX = st.danceTilt = 0; } return; }
+  if (now > dance.until || (dance.auto && dance.src === 'music' && !music.on)) { stopDance(); return; }
+  if (dance.src === 'music' && music.on) { dance.bpm = music.bpm || dance.bpm; if (music.lastOnset > dance.anchor + 30) dance.anchor = music.lastOnset; }
+  const ms = 60000 / dance.bpm, t = Math.max(0, now - dance.anchor), b = Math.floor(t / ms), ph = (t % ms) / ms;
+  const k = st.speaking ? .5 : 1, still = reduceMQ.matches;
+  if (dance.pattern && dance.src === 'own') {   // her own beat, in 8th notes
+    const si = Math.floor(t / (ms / 2));
+    if (si !== dance.step) { dance.step = si; const ch = dance.pattern[si % dance.pattern.length]; if (ch && ch !== '-' && ch !== '.') drum(ch); }
+  }
+  if (still) return;
+  const side = b % 2 ? 1 : -1, sw = Math.sin((t / ms) * Math.PI);
+  let x = 0, tilt = 0;
+  if (dance.style === 'sway') { x = sw * 5 * k; tilt = sw * .09 * k; }
+  else if (dance.style === 'groove') { x = sw * 3.5 * k; tilt = Math.sin((t / ms) * Math.PI + .6) * .06 * k; }
+  else if (dance.style === 'wiggle') tilt = side * .07 * Math.sin(ph * Math.PI) * k;
+  else if (dance.style === 'bop') tilt = side * .045 * k;
+  st.danceX = lerp(st.danceX, x, .35); st.danceTilt = lerp(st.danceTilt, tilt, .3);
+  if (b !== dance.beat) {
+    dance.beat = b;
+    if (dance.style === 'bop') bump(.35 * k);
+    else if (dance.style === 'bounce') { st.hopV -= 55 * k; st.squishV -= 2.5 * k; }
+    else if (dance.style === 'headbang') { st.hopV += 70 * k; st.eyeScale = .45; if (b % 4 === 0) st.popV += 8; }
+    else if (dance.style === 'nod') st.hopV += 32 * k;
+    else if (dance.style === 'wiggle') st.squishV += side * 3.5 * k;
+    else if (dance.style === 'groove') { if (b % 2) bump(.25 * k); }
+    else if (dance.style === 'sway') { if (b % 4 === 0) bump(.15 * k); }
+    if (Math.random() < .08) spawnFx('music');
+  }
+}
+
+/* ================= her arcade: games she invents on the spot ================= */
+/* She puts tappable things on her screen (her own doodles or words), makes them move, hide or
+   respawn, keeps score and runs a timer. Every tap comes back to her, so she can react, change the
+   rules mid-game, add more, or end it. */
+let arc = null;
+const ARC_MOTIONS = ['still', 'float', 'bounce', 'fall', 'rise', 'drift', 'zip', 'blink', 'spin'];
+const isNum = v => v !== undefined && v !== null && v !== '' && isFinite(+v);
+const isTrue = v => v === true || v === 'true';
+function arcRect() { const r = st.region; return { x: r.x + 16, y: r.y + 44, w: Math.max(80, r.w - 32), h: Math.max(80, r.h - 60) }; }
+function parseList(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') { try { const j = JSON.parse(v); return Array.isArray(j) ? j : (j && typeof j === 'object' ? [j] : []); } catch (e) { return []; } }
+  return v && typeof v === 'object' ? [v] : [];
+}
+function mkPiece(q, i) {
+  const now = performance.now();
+  let shape = null;
+  if (q.paths) { const polys = parsePath(String(q.paths)); if (polys.length) shape = normalize(polys); }
+  const pc = {
+    src: q, id: String(q.id || ('p' + (i != null ? i : Math.random().toString(36).slice(2, 6)))).slice(0, 24),
+    label: String(q.label != null ? q.label : '').slice(0, 24), shape,
+    fx: isNum(q.x) ? clamp(+q.x, 0, 100) / 100 : rnd(.1, .9), fy: isNum(q.y) ? clamp(+q.y, 0, 100) / 100 : rnd(.15, .85),
+    size: { small: 44, medium: 64, big: 92 }[q.size] || 60,
+    motion: ARC_MOTIONS.includes(q.motion) ? q.motion : 'still', speed: clamp(isNum(q.speed) ? +q.speed : 1, .2, 4),
+    value: isNum(q.value) ? clamp(Math.round(+q.value), -99, 99) : 1, stay: isTrue(q.stay), respawn: isTrue(q.respawn), hidden: isTrue(q.hidden),
+    t0: now, ph: Math.random() * TAU, vx: rnd(-1, 1), vy: rnd(-1, 1), popT: 0, dying: false, gone: false, back: 0, peekUntil: 0
+  };
+  const sp = Math.hypot(pc.vx, pc.vy) || 1; pc.vx /= sp; pc.vy /= sp;
+  return pc;
+}
+const descP = pc => pc.label ? `"${pc.label}"` : pc.id;
+function pieceBox(pc) {
+  const fs = pc.shape ? clamp(pc.size * .34, 18, 28) : 30;
+  const tw = pc.label ? Math.max(18, pc.label.length * fs * .48) : 0;
+  if (pc.hidden && !(pc.peekUntil > performance.now())) return { hw: 30, hh: 30, fs: 36 };
+  if (pc.shape) return { hw: Math.max(pc.size / 2, tw / 2), hh: pc.size / 2 + (pc.label ? fs * .7 : 0), fs };
+  return { hw: tw / 2 + 12, hh: fs * .55 + 8, fs };
+}
+function piecePos(pc, now) {
+  const R = arcRect(), age = (now - pc.t0) / 1000;
+  let x = R.x + pc.fx * R.w, y = R.y + pc.fy * R.h, rot = 0, vis = true;
+  if (!reduceMQ.matches) {
+    if (pc.motion === 'float') y += Math.sin(age * 1.8 + pc.ph) * 6;
+    else if (pc.motion === 'zip') x = R.x + (.5 + .42 * Math.sin(age * 1.6 * pc.speed + pc.ph)) * R.w;
+    else if (pc.motion === 'blink') vis = Math.sin(age * 2.4 * pc.speed + pc.ph) > -.25;
+    else if (pc.motion === 'spin') rot = age * 1.8 * pc.speed;
+  }
+  return { x, y, rot, vis };
+}
+function arcade(p = {}) {
+  const now = performance.now();
+  const act = ['start', 'add', 'update', 'remove', 'end'].includes(p.action) ? p.action : (arc ? 'add' : 'start');
+  if (act === 'end') { if (arc) arcEnd('you ended it'); return 'ended'; }
+  if (act === 'start' || !arc) {
+    ttt = null; endDrawing();
+    arc = { title: 'MINI GAME', rules: '', t0: now, rulesT: now, until: 0, score: 0, taps: 0, misses: 0, escaped: 0, pieces: [], batch: [], batchMiss: 0, lastFlush: now, floaters: [], quietUntil: 0 };
+    bump(.6); sfx.blip(); screenCue('flash');
+  }
+  if (p.title) arc.title = String(p.title).slice(0, 28).toUpperCase();
+  if (p.rules) { arc.rules = String(p.rules).slice(0, 100); arc.rulesT = now; }
+  if (isNum(p.seconds) && +p.seconds > 0) arc.until = now + clamp(+p.seconds, 3, 180) * 1000;
+  if (isNum(p.score)) arc.score = Math.round(+p.score);
+  const list = parseList(p.pieces).filter(q => q && typeof q === 'object');
+  if (act === 'remove') {
+    const ids = new Set(String(p.ids || '').split(/[\s,]+/).concat(list.map(q => q.id)).filter(Boolean).map(String));
+    for (const pc of arc.pieces) if (ids.has(pc.id)) pc.gone = true;
+    arc.quietUntil = now + 3000; return 'removed';
+  }
+  if (act === 'update') {
+    for (const q of list) {
+      const pc = arc.pieces.find(x => x.id === String(q.id)); if (!pc) continue;
+      const merged = Object.assign({}, pc.src, q), fresh = mkPiece(merged);
+      if (!isNum(q.x)) fresh.fx = pc.fx; if (!isNum(q.y)) fresh.fy = pc.fy;
+      Object.assign(pc, fresh, { t0: pc.t0, popT: now, src: merged });
+    }
+    return 'updated';
+  }
+  for (const q of list.slice(0, 30)) {
+    const pc = mkPiece(q, arc.pieces.length), i = arc.pieces.findIndex(x => x.id === pc.id);
+    if (i >= 0) arc.pieces[i] = pc; else arc.pieces.push(pc);
+  }
+  arc.pieces = arc.pieces.filter(x => !x.gone).slice(-30);
+  return act === 'start' ? 'started' : 'added';
+}
+function arcFlush(now) {
+  if (!arc) return;
+  const b = arc.batch.splice(0), m = arc.batchMiss; arc.batchMiss = 0; arc.lastFlush = now;
+  const bits = b.slice(-12); if (m) bits.push(m + (m === 1 ? ' miss' : ' misses'));
+  if (!bits.length) return;
+  senseTurn(`[game] ${arc.title}: score ${arc.score}. Just now: ${bits.join(', ')}${arc.until ? `. ${Math.max(0, Math.ceil((arc.until - now) / 1000))} seconds left` : ''}.`);
+}
+function arcEnd(reason) {
+  if (!arc) return;
+  const a = arc; arc = null;
+  showPop(reason === "time's up" ? 'TIME!' : 'GAME OVER'); sfx.note(523, 784, .25, .05, 'triangle'); bump(.8);
+  gameTurn(`${a.title} is over (${reason}). Final score: ${a.score}. ${a.taps} hits, ${a.misses} misses${a.escaped ? `, ${a.escaped} got away` : ''}.`);
+}
+function arcTap(x, y, now) {
+  let best = null, bd = Infinity;
+  for (const pc of arc.pieces) {
+    if (pc.gone || pc.back || pc.dying) continue;
+    const P = piecePos(pc, now); if (!P.vis) continue;
+    const B = pieceBox(pc), dx = Math.abs(x - P.x), dy = Math.abs(y - P.y);
+    if (dx <= B.hw + 12 && dy <= B.hh + 12 && dx + dy < bd) { bd = dx + dy; best = pc; }
+  }
+  if (!best) { arc.misses++; arc.batchMiss++; sfx.note(190, 120, .06, .02, 'triangle'); return true; }
+  const pc = best, P = piecePos(pc, now);
+  arc.score += pc.value; arc.taps++; pc.popT = now;
+  arc.floaters.push({ text: (pc.value >= 0 ? '+' : '') + pc.value, x: P.x, y: P.y - pieceBox(pc).hh, t0: now });
+  if (pc.value >= 0) sfx.note(660, 990, .08, .035, 'square'); else sfx.note(300, 140, .18, .05, 'sawtooth');
+  bump(.2);
+  const wasHidden = pc.hidden && !(pc.peekUntil > now);
+  if (pc.hidden) pc.peekUntil = now + 1600;
+  const what = wasHidden ? `the hidden ${pc.id}${pc.label ? ` (it was "${pc.label}")` : ''}` : descP(pc);
+  if (pc.stay) gameTurn(`${arc.title}: they tapped ${what}${pc.value ? ` (${pc.value > 0 ? '+' : ''}${pc.value})` : ''}. Score ${arc.score}.`);
+  else { pc.dying = true; arc.batch.push(what + (pc.value !== 1 ? ` (${pc.value > 0 ? '+' : ''}${pc.value})` : '')); }
+  return true;
+}
+
+/* tic-tac-toe: they are X, she is O and picks her own moves (her hand moves on its own if she dawdles) */
+let ttt = null;
+const TTT_LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+function tttWinner(b) { for (const L of TTT_LINES) if (b[L[0]] && b[L[0]] === b[L[1]] && b[L[1]] === b[L[2]]) return { who: b[L[0]], line: L }; return b.every(Boolean) ? { who: 'draw' } : null; }
+const tttText = b => [0, 3, 6].map(r => [0, 1, 2].map(c => b[r + c] || String(r + c + 1)).join(' ')).join(' / ');
+function tttAI(b) {
+  const free = b.map((v, i) => v ? -1 : i).filter(i => i >= 0);
+  const find = m => { for (const L of TTT_LINES) { const v = L.map(i => b[i]); if (v.filter(x => x === m).length === 2 && v.includes('')) return L[v.indexOf('')]; } return -1; };
+  let i = find('O'); if (i >= 0) return i;
+  if (Math.random() < .85) { i = find('X'); if (i >= 0) return i; }
+  if (!b[4] && Math.random() < .8) return 4;
+  const corners = [0, 2, 6, 8].filter(c => !b[c]);
+  return corners.length && Math.random() < .7 ? pick(corners) : pick(free);
+}
+function tttCall(p = {}) {
+  const now = performance.now(), mv = parseInt(p.move, 10);
+  if (!ttt || ttt.over) {
+    arc = null; endDrawing();
+    const herFirst = isTrue(p.you_start);
+    ttt = { board: Array(9).fill(''), marks: [], turn: herFirst ? 'her' : 'you', herDue: herFirst ? now + 7000 : 0, over: null, endAt: 0, t0: now, nag: 0 };
+    sfx.blip(); bump(.5);
+    senseNote(`[game] Tic-tac-toe is on. They are X, you are O. Cells are 1 to 9, left to right, top to bottom. ${herFirst ? 'You go first: call game with type tictactoe and your move.' : 'They go first; when it\'s your turn you\'ll get the board.'}`);
+    if (!(mv >= 1 && mv <= 9) || !herFirst) return 'started';
+  }
+  if (ttt.turn !== 'her') return 'not your turn yet';
+  let i = mv - 1;
+  if (!(i >= 0 && i < 9) || ttt.board[i]) i = tttAI(ttt.board);
+  tttPlace(i, 'O', now);
+  return 'you played ' + (i + 1);
+}
+function tttPlace(i, mark, now) {
+  ttt.board[i] = mark; ttt.marks.push({ i, mark, t0: now }); sfx.scribble(.3); bump(.25);
+  const w = tttWinner(ttt.board);
+  if (w) {
+    ttt.over = w; ttt.endAt = now + 3600; const bt = tttText(ttt.board);
+    if (w.who === 'O') { setTimeout(() => applyFace({ mood: 'smug', effect: 'sparkles' }), 450); gameTurn(`Tic-tac-toe: you got three in a row, you won. Board: ${bt}.`); }
+    else if (w.who === 'X') { setTimeout(() => applyFace({ mood: 'shook', blend_with: 'grumpy', blend: .4, screen: 'static' }), 450); gameTurn(`Tic-tac-toe: they got three in a row, you lost. Board: ${bt}.`); }
+    else gameTurn(`Tic-tac-toe: it's a draw. Board: ${bt}.`);
+    return;
+  }
+  if (mark === 'X') { ttt.turn = 'her'; ttt.herDue = now + 7000; gameTurn(`Tic-tac-toe: they put X in cell ${i + 1}. Board: ${tttText(ttt.board)}. Your move as O: call game with type tictactoe and move 1 to 9.`); }
+  else ttt.turn = 'you';
+}
+function tttRect() { const r = st.bTarget; if (!r) return null; const s = Math.min(r.w, r.h) * .8; return { x: r.x + (r.w - s) / 2, y: r.y + (r.h - s) / 2, s }; }
+function tttTap(x, y, now) {
+  const B = tttRect(); if (!B) return true;
+  const cs = B.s / 3, cx = Math.floor((x - B.x) / cs), cy = Math.floor((y - B.y) / cs);
+  if (cx < 0 || cx > 2 || cy < 0 || cy > 2) return false;   // off the board: she feels it like any other touch
+  if (ttt.over) return true;
+  const i = cy * 3 + cx;
+  if (ttt.turn !== 'you') { if (now - ttt.nag > 1500) { ttt.nag = now; showPop('MY TURN'); } return true; }
+  if (!ttt.board[i]) tttPlace(i, 'X', now);
+  return true;
+}
+
+function gameTap(x, y, now) { if (ttt) return tttTap(x, y, now); if (arc) return arcTap(x, y, now); return false; }
+function gamesTick(now, dt) {
+  if (ttt) {
+    if (ttt.over) { if (now > ttt.endAt) ttt = null; }
+    else if (ttt.turn === 'her' && now > ttt.herDue) { const i = tttAI(ttt.board); senseNote(`[game] You took too long, so your hand moved on its own: O in cell ${i + 1}.`); tttPlace(i, 'O', now); }
+  }
+  if (!arc) return;
+  const still = reduceMQ.matches;
+  for (const pc of arc.pieces) {
+    if (pc.gone) continue;
+    if (pc.dying) { if (now - pc.popT > 260) { pc.dying = false; pc.popT = 0; if (pc.respawn) pc.back = now + rnd(400, 1300); else pc.gone = true; } continue; }
+    if (pc.back) { if (now >= pc.back) { pc.back = 0; pc.t0 = now; pc.peekUntil = 0; pc.fx = rnd(.08, .92); pc.fy = pc.motion === 'fall' ? -.04 : pc.motion === 'rise' ? 1.04 : rnd(.12, .88); } continue; }
+    if (pc.popT && now - pc.popT > 300) pc.popT = 0;
+    if (still) continue;
+    const v = .16 * pc.speed * dt;
+    if (pc.motion === 'bounce' || pc.motion === 'drift') {
+      if (pc.motion === 'drift') { const a = Math.atan2(pc.vy, pc.vx) + rnd(-1.4, 1.4) * dt * 2; pc.vx = Math.cos(a); pc.vy = Math.sin(a); }
+      const k = pc.motion === 'drift' ? .35 : 1;
+      pc.fx += pc.vx * v * k; pc.fy += pc.vy * v * k;
+      if (pc.fx < .04 || pc.fx > .96) { pc.vx *= -1; pc.fx = clamp(pc.fx, .04, .96); }
+      if (pc.fy < .04 || pc.fy > .96) { pc.vy *= -1; pc.fy = clamp(pc.fy, .04, .96); }
+    } else if (pc.motion === 'fall' || pc.motion === 'rise') {
+      pc.fy += (pc.motion === 'fall' ? 1 : -1) * v * .9;
+      if (pc.fy > 1.08 || pc.fy < -.08) {
+        if (pc.value > 0) { arc.escaped++; arc.batch.push(descP(pc) + ' got away'); }
+        if (pc.respawn) { pc.fx = rnd(.08, .92); pc.fy = pc.motion === 'fall' ? -.04 : 1.04; pc.t0 = now; } else pc.gone = true;
+      }
+    }
+  }
+  arc.floaters = arc.floaters.filter(f => now - f.t0 < 900);
+  if ((arc.batch.length || arc.batchMiss) && now - arc.lastFlush > 2500) arcFlush(now);
+  if (arc.until && now > arc.until) arcEnd("time's up");
+  else if (arc.taps && now > arc.quietUntil && arc.pieces.length && arc.pieces.every(pc => pc.gone)) arcEnd('they cleared everything');
+}
+
+/* drawing the games, in her glowing line style */
+function gText(t, x, y, px, align = 'center', alpha = 1) {
+  ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalAlpha = clamp(alpha, 0, 1);
+  ctx.font = `${Math.round(px)}px VT323, monospace`; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = 5 * DPR; ctx.fillText(t, x, y); ctx.restore();
+}
+const polyLen = P => { let l = 0; for (let i = 1; i < P.length; i++) l += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]); return l; };
+function gPath(polys, w, alpha = 1, upto = 1) {
+  const total = polys.reduce((s, P) => s + polyLen(P), 0);
+  for (const [blur, a] of [[7 * DPR, .45], [1.6 * DPR, 1]]) {
+    ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.globalAlpha = clamp(alpha, 0, 1) * a;
+    ctx.strokeStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = blur; ctx.lineWidth = w; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    strokePartial(polys, total * clamp(upto, 0, 1)); ctx.restore();
+  }
+}
+function gShape(shape, x, y, size, rot, alpha, upto = 1) {
+  for (const [blur, a] of [[6 * DPR, .5], [1.5 * DPR, 1]]) {
+    ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(size, size);
+    ctx.globalAlpha = clamp(alpha, 0, 1) * a; ctx.strokeStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = blur;
+    ctx.lineWidth = clamp(size * .05, 2, 4.5) / size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    strokePartial(shape.polys, shape.len * clamp(upto, 0, 1)); ctx.restore();
+  }
+}
+const boxPts = (x, y, hw, hh) => [[[x - hw, y - hh], [x + hw, y - hh], [x + hw, y + hh], [x - hw, y + hh], [x - hw, y - hh]]];
+function renderGames(now) {
+  const still = reduceMQ.matches;
+  if (ttt) {
+    const B = tttRect();
+    if (B) {
+      const c = B.s / 3, g = still ? 1 : easeOut(clamp((now - ttt.t0) / 600, 0, 1)), fade = ttt.over ? 1 - clamp((now - ttt.endAt + 500) / 500, 0, 1) : 1;
+      gPath([[[B.x + c, B.y], [B.x + c, B.y + B.s]], [[B.x + 2 * c, B.y], [B.x + 2 * c, B.y + B.s]], [[B.x, B.y + c], [B.x + B.s, B.y + c]], [[B.x, B.y + 2 * c], [B.x + B.s, B.y + 2 * c]]], 3, fade, g);
+      for (const m of ttt.marks) {
+        const cx = B.x + (m.i % 3 + .5) * c, cy = B.y + (Math.floor(m.i / 3) + .5) * c, r = c * .3, k = still ? 1 : easeOut(clamp((now - m.t0) / 280, 0, 1));
+        if (m.mark === 'X') gPath([[[cx - r, cy - r], [cx + r, cy + r]], [[cx + r, cy - r], [cx - r, cy + r]]], 4, fade, k);
+        else { const P = []; for (let a = 0; a <= 40; a++) { const t = -Math.PI / 2 + a / 40 * TAU; P.push([cx + Math.cos(t) * r, cy + Math.sin(t) * r]); } gPath([P], 4, fade, k); }
+      }
+      if (ttt.over && ttt.over.line) {
+        const L = ttt.over.line, cc = i => [B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c];
+        gPath([[cc(L[0]), cc(L[2])]], 5, fade, still ? 1 : easeOut(clamp((now - ttt.endAt + 3600 - 300) / 400, 0, 1)));
+      }
+      gText(ttt.over ? (ttt.over.who === 'O' ? 'SHE WINS' : ttt.over.who === 'X' ? 'YOU WIN' : 'DRAW') : ttt.turn === 'you' ? 'YOUR MOVE' : 'HER MOVE…', B.x + B.s / 2, B.y - 18, 24, 'center', fade);
+    }
+  }
+  if (!arc) return;
+  const R = arcRect();
+  gText(arc.title, R.x + R.w / 2, R.y - 22, 26);
+  gText('SCORE ' + arc.score, R.x + R.w, R.y - 22, 22, 'right');
+  if (arc.until) gText(Math.max(0, Math.ceil((arc.until - now) / 1000)) + 'S', R.x, R.y - 22, 22, 'left');
+  if (arc.rules && now - arc.rulesT < 7000) gText(arc.rules.toUpperCase(), R.x + R.w / 2, R.y + 4, 17, 'center', .85 * (1 - clamp((now - arc.rulesT - 6000) / 1000, 0, 1)));
+  for (const pc of arc.pieces) {
+    if (pc.gone || pc.back) continue;
+    const P = piecePos(pc, now); if (!P.vis) continue;
+    const age = (now - pc.t0) / 1000, B = pieceBox(pc);
+    let sc = still ? 1 : backOut(clamp(age / .3, 0, 1)), al = 1;
+    if (pc.popT) { const k = clamp((now - pc.popT) / 260, 0, 1); if (pc.dying) { sc *= 1 + k * .5; al = 1 - k; } else sc *= 1 + Math.sin(k * Math.PI) * .18; }
+    if (pc.hidden && !(pc.peekUntil > now) && !pc.dying) { gPath(boxPts(P.x, P.y, 28 * sc, 28 * sc), 2.5, al); gText('?', P.x, P.y + 1, 38 * sc, 'center', al); continue; }
+    if (pc.shape) gShape(pc.shape, P.x, P.y - (pc.label ? B.fs * .35 : 0), pc.size * sc, P.rot, al, easeOut(clamp(age / .4, 0, 1)));
+    if (pc.label) gText(pc.label, P.x, pc.shape ? P.y + pc.size * sc / 2 + B.fs * .2 : P.y, B.fs * sc, 'center', al);
+    if (!pc.shape && pc.stay) gPath(boxPts(P.x, P.y, B.hw * sc, B.hh * sc), 2, al * .9);
+  }
+  for (const f of arc.floaters) { const k = (now - f.t0) / 900; gText(f.text, f.x, f.y - k * 42, 26, 'center', 1 - k); }
+}
+
+/* ================= a life of her own ================= */
+/* Days you've known each other, your streak, anniversaries, her mood of the day, what she's into
+   lately and her nickname for you. The page keeps count; the feelings and picks are hers. */
+const LIFE_KEY = 'lumi-live:life';
+const LIFE0 = () => ({ first: '', lastDay: '', streak: 0, days: 0, chats: 0, dayMood: null, obsession: null, nick: '', lastMilestone: -1 });
+function readLife() { try { return Object.assign(LIFE0(), JSON.parse(localStorage.getItem(LIFE_KEY) || '{}') || {}); } catch (e) { return LIFE0(); } }
+function writeLife(L) { try { localStorage.setItem(LIFE_KEY, JSON.stringify(L)); } catch (e) {} renderLife(); }
+const dayStr = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const daysBetween = (a, b) => Math.round((new Date(b + 'T12:00') - new Date(a + 'T12:00')) / 864e5);
+const NUDGE = ['restless', 'cozy', 'cranky', 'clingy', 'competitive', 'dreamy', 'mischievous', 'artsy', 'nosy', 'dramatic', 'hyper', 'sleepy', 'philosophical', 'chaotic', 'soft', 'smug', 'bored', 'sentimental'];
+function lifeOnWake() {
+  const L = readLife(), now = new Date(), today = dayStr(now), yest = dayStr(new Date(now.getTime() - 864e5));
+  if (!L.first) L.first = today;
+  if (L.lastDay !== today) { L.streak = L.lastDay === yest ? L.streak + 1 : 1; L.days++; L.lastDay = today; }
+  L.chats++;
+  writeLife(L); return L;
+}
+function lifeNote(L) {
+  const today = dayStr(new Date()), known = daysBetween(L.first, today), parts = [];
+  if (L.chats <= 1) parts.push('[life] This is the very first time you two have ever talked. Today is the day you first woke up for them, your birthday in a way.');
+  else parts.push(`[life] You've known them ${known < 1 ? 'since today' : 'for ' + known + (known === 1 ? ' day' : ' days')}. This is chat number ${L.chats}. They've visited you on ${L.days} different days${L.streak >= 2 ? `, ${L.streak} days in a row right now` : ''}.`);
+  const MS = { 7: 'one week', 30: 'one month', 100: '100 days', 182: 'half a year', 365: 'one year', 730: 'two years' };
+  if (MS[known] && L.lastMilestone !== known) { parts.push(`Today is your ${MS[known]} anniversary of meeting them. Make it a moment if you feel like it.`); L.lastMilestone = known; writeLife(L); }
+  if ([10, 25, 50, 100, 250, 500, 1000].includes(L.chats)) parts.push(`This is your ${L.chats}th chat with them.`);
+  if (L.dayMood && L.dayMood.day === today) parts.push(`Today you woke up feeling: ${L.dayMood.text}. Let it color you, but feelings can shift.`);
+  else parts.push(`It's a new day for you. Decide in your own words how you woke up feeling today and save it with the life tool. If you can't decide, maybe you're a little ${pick(NUDGE)} today.`);
+  if (L.obsession && L.obsession.text) { const d = daysBetween(L.obsession.day, today); parts.push(`Lately you're obsessed with: ${L.obsession.text} (${d < 1 ? 'since today' : 'for ' + d + (d === 1 ? ' day' : ' days')}). Bring it up now and then. If you're over it, pick a new one with the life tool.`); }
+  else parts.push('You have no current obsession. Pick something you are weirdly into lately, anything at all and unexpected, and save it with the life tool.');
+  if (L.nick) parts.push(`Your nickname for them: ${L.nick}.`);
+  if (S.lastSeen && Date.now() - S.lastSeen > 6 * 3600e3) parts.push('Your life kept going while they were away. If it fits, mention one small made-up thing you did, dreamed or thought about in standby, different every time.');
+  return parts.join(' ');
+}
+function setLife(p = {}) {
+  const L = readLife(), today = dayStr(new Date());
+  if (p.day_mood) L.dayMood = { day: today, text: String(p.day_mood).slice(0, 90) };
+  if (p.obsession) L.obsession = { day: today, text: String(p.obsession).slice(0, 90) };
+  if (p.nickname) L.nick = String(p.nickname).slice(0, 30);
+  writeLife(L); return 'saved';
+}
+function renderLife() {
+  const ul = $('#lifeList'); if (!ul) return; ul.textContent = '';
+  const L = readLife(), today = dayStr(new Date());
+  if (!L.first) { ul.append(emptyRow('She hasn\'t woken up yet.')); return; }
+  const row = t => { const li = document.createElement('li'); const sp = document.createElement('span'); sp.textContent = t; li.append(sp); ul.append(li); };
+  const known = daysBetween(L.first, today);
+  row(`KNOWN YOU ▸ ${known < 1 ? 'SINCE TODAY' : known + (known === 1 ? ' DAY' : ' DAYS')} · ${L.chats} CHAT${L.chats === 1 ? '' : 'S'}${L.streak > 1 ? ' · ' + L.streak + '-DAY STREAK' : ''}`);
+  row('TODAY SHE FEELS ▸ ' + (L.dayMood && L.dayMood.day === today ? L.dayMood.text : 'she hasn\'t decided yet'));
+  row('LATELY INTO ▸ ' + (L.obsession ? L.obsession.text : 'nothing yet'));
+  if (L.nick) row('SHE CALLS YOU ▸ ' + L.nick);
 }
 
 /* ================= "hey Lumi" ================= */
@@ -2669,6 +3074,7 @@ function frame(now) {
   trackEyes(now);
   trackObjects(now);
   autonomyTick(now);
+  danceTick(now); gamesTick(now, dt);
   update(now, dt);
   renderFace(now);
   composite(now);
@@ -2682,7 +3088,8 @@ if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
-  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type };
+  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
+  dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();
 </script>

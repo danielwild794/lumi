@@ -202,6 +202,7 @@ body.bare .toast{opacity:.9}
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">HER VOLUME</span><button id="herVolBtn" type="button">100%</button></div>
+        <div class="row"><span class="lbl">MOUTH TIMING</span><button id="lipBtn" type="button">IN SYNC</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
@@ -292,6 +293,57 @@ if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim()
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
 const COL = '#f1f6ff';
+/* ================= her colors ================= */
+/* Her lines stay white so she always looks like herself. The glow around them takes on her mood's color, big
+   feelings flash the color through her lines for a beat, and she can wear a color on purpose for a while. */
+const MOOD_HUE = {
+  chill: null, happy: '#ffd36b', laughing: '#ffc84a', smug: '#b48cff', mischievous: '#d86bff', curious: '#5ff2d6',
+  confused: '#86e8c0', thinking: '#7fb2ff', sleepy: '#9a8cff', shook: '#7ff0ff', flustered: '#ff7ab8', smitten: '#ff5fa2',
+  kissy: '#ff6f9f', hungry: '#ffa25c', sad: '#5f8dff', crying: '#4d7cff', sulky: '#8a7dff', grumpy: '#ff6a4a',
+  angry: '#ff3b3b', wink: '#ff9ad5', starry: '#ffe066', awe: '#6fe3ff', proud: '#ffcf4d', determined: '#ff8a3d',
+  nervous: '#d8f06a', cringe: '#9de86a', bleh: '#a6ff6b', unimpressed: '#a9b4c6', blank: '#b8c0cc', ko: '#b39cff',
+  serene: '#8ff5e0', dizzy: 'rainbow'
+};
+const NAMED_HUE = { white: null, mood: 'mood', pink: '#ff6fae', rose: '#ff5f8f', red: '#ff3b3b', orange: '#ff8a3d',
+  yellow: '#ffe066', gold: '#ffcf4d', green: '#7dff7a', lime: '#b6ff5c', mint: '#8ff5e0', teal: '#3ff0c8', cyan: '#5fefff',
+  blue: '#5f8dff', 'sky blue': '#7fd0ff', purple: '#b06bff', violet: '#9d7bff', lavender: '#b7a6ff', magenta: '#ff4fd8', rainbow: 'rainbow' };
+const FLASHY = new Set(['angry', 'grumpy', 'flustered', 'smitten', 'kissy', 'shook', 'starry', 'crying', 'laughing', 'proud', 'awe', 'cringe', 'ko', 'nervous']);
+const tint = { r: 241, g: 246, b: 255, amt: 0, flash: 0, user: null, userUntil: 0 };
+const hexRgb = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+function hslRgb(h, sat, l) {
+  const a = sat * Math.min(l, 1 - l), f = n => { const k = (n + h / 30) % 12; return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))); };
+  return [f(0), f(8), f(4)];
+}
+function shownMoods() { const head = String((st.shown && st.shown.id) || '').split('/')[0].split('+'); return [head[0], head[1] || null]; }
+function tintTick(now, dt) {
+  let want;
+  if (tint.user && now < tint.userUntil) want = tint.user;
+  else {
+    tint.user = null;
+    const [a, b] = shownMoods(), k = b ? st.mixK : 0, ha = MOOD_HUE[a] || null, hb = b ? (MOOD_HUE[b] || null) : null;
+    want = k > .5 ? (hb || ha) : (ha || (k > .25 ? hb : null));
+  }
+  const rgb = want === 'rainbow' ? hslRgb((now / 9) % 360, .95, .68) : want ? hexRgb(want) : [241, 246, 255];
+  const k = 1 - Math.exp(-dt * 7);
+  tint.r += (rgb[0] - tint.r) * k; tint.g += (rgb[1] - tint.g) * k; tint.b += (rgb[2] - tint.b) * k;
+  tint.amt += ((want ? 1 : 0) - tint.amt) * k;
+  tint.flash *= Math.exp(-dt * 2.4);
+}
+/* white mixed toward her current color by k (0 = her usual white, 1 = full color) */
+function inkFor(k, a = 1) {
+  k = clamp(k, 0, 1);
+  return `rgba(${Math.round(lerp(241, tint.r, k))},${Math.round(lerp(246, tint.g, k))},${Math.round(lerp(255, tint.b, k))},${a})`;
+}
+let INK = COL, GLOWC = COL;
+/* she (or you, through her) picks a color to wear for a while; 'mood' or 'white' goes back */
+function wearColor(name, secs) {
+  const n = String(name || '').toLowerCase().trim();
+  let hex = NAMED_HUE[n] !== undefined ? NAMED_HUE[n] : /^#[0-9a-f]{6}$/i.test(n) ? n : undefined;
+  if (hex === undefined) return false;
+  if (hex === 'mood') { tint.user = null; tint.userUntil = 0; return true; }
+  tint.user = hex || '#f1f6ff'; tint.userUntil = performance.now() + clamp(+secs || 90, 5, 900) * 1000; tint.flash = .8;
+  return true;
+}
 
 /* ================= moods ================= */
 /* brows per side: [lift (negative = up), inner raise (worried), arch] */
@@ -312,7 +364,22 @@ const MOODS = [
   { id: 'starry',      key: null, name: 'STARRY', eye: 'almond', open: 1.25, lid: 0,   tilt: 0,    pupil: 1.15, pupilType: 'star', mouth: 'grin', blush: .6, fx: 'sparkles', wander: .2, head: .03, brows: { L: [-3, 0, 1.5], R: [-3, 0, 1.5] } },
   { id: 'unimpressed', key: null, name: 'UNIMPRESSED', eye: 'flat',                                              mouth: 'flat',  blush: 0,   fx: null,       wander: 0,   head: 0,     brows: { L: [1.4, -.3, 0], R: [1.4, -.3, 0] } },
   { id: 'crying',      key: null, name: 'CRYING', eye: 'closed',                                                 mouth: 'wail',  blush: .5,  fx: 'tears',    wander: 0,   head: -.03,  brows: { L: [-1, 3.2, .3], R: [-1, 3.2, .3] } },
-  { id: 'dizzy',       key: null, name: 'DIZZY',  eye: 'spiral',                                                 mouth: 'wavy',  blush: .15, fx: null,       wander: 0,   head: 0,     brows: { L: [-2, 2, .5], R: [-3, -1, .5] } }
+  { id: 'dizzy',       key: null, name: 'DIZZY',  eye: 'spiral',                                                 mouth: 'wavy',  blush: .15, fx: null,       wander: 0,   head: 0,     brows: { L: [-2, 2, .5], R: [-3, -1, .5] } },
+  { id: 'laughing',    key: null, name: 'LAUGHING', eye: 'arc',                                                  mouth: 'open',  blush: .65, fx: 'sparkles', wander: .2,  head: .07,   brows: { L: [-3, .4, 2], R: [-3, .4, 2] } },
+  { id: 'angry',       key: null, name: 'ANGRY',  eye: 'almond', open: .9,   lid: .44, tilt: -.3,  pupil: .78,  mouth: 'zigzag', blush: .2, fx: 'anger',    wander: .1,  head: -.06,  brows: { L: [2, -3.2, 0], R: [2, -3.2, 0] } },
+  { id: 'determined',  key: null, name: 'DETERMINED', eye: 'almond', open: 1, lid: .3,  tilt: -.16, pupil: .92,  mouth: 'flat',  blush: 0,   fx: null,       wander: .1,  head: -.03,  brows: { L: [.6, -1.6, .6], R: [.6, -1.6, .6] } },
+  { id: 'mischievous', key: null, name: 'MISCHIEVOUS', eye: 'almond', open: 1, lid: .34, tilt: -.1, pupil: .9,  mouth: 'teeth', blush: .35, fx: 'twinkle',  wander: .25, head: .06,   gaze: [-.6, .1], brows: { L: [-3.6, -1, 1.8], R: [.8, -1.6, .4] } },
+  { id: 'nervous',     key: null, name: 'NERVOUS', eye: 'almond', open: 1.22, lid: 0,   tilt: .08,  pupil: .55,  mouth: 'teeth', blush: .3,  fx: 'sweat',    wander: .5,  head: -.03,  brows: { L: [-2.4, 2.6, .4], R: [-2.4, 2.6, .4] } },
+  { id: 'awe',         key: null, name: 'AWE',    eye: 'almond', open: 1.36, lid: 0,   tilt: .02,  pupil: 1.28, mouth: 'o',     blush: .3,  fx: 'sparkles', wander: .1,  head: .02,   gaze: [0, -.3], brows: { L: [-4.6, .8, 2.2], R: [-4.6, .8, 2.2] } },
+  { id: 'ko',          key: null, name: 'K.O.',   eye: 'x',                                                      mouth: 'wavy',  blush: 0,   fx: null,       wander: 0,   head: .1,    brows: { L: [-1, 1.5, .4], R: [-1.6, 1.2, .4] } },
+  { id: 'proud',       key: null, name: 'PROUD',  eye: 'closed',                                                 mouth: 'grin',  blush: .4,  fx: 'sparkles', wander: 0,   head: -.09,  brows: { L: [-3, -.6, 2], R: [-3, -.6, 2] } },
+  { id: 'sulky',       key: null, name: 'SULKY',  eye: 'flat',                                                   mouth: 'pout',  blush: .55, fx: null,       wander: .1,  head: -.06,  gaze: [-.7, .4], brows: { L: [-.6, 2.6, .3], R: [-.6, 2.6, .3] } },
+  { id: 'bleh',        key: null, name: 'BLEH',   eye: 'squeeze',                                                mouth: 'bleh',  blush: .4,  fx: null,       wander: 0,   head: .05,   brows: { L: [-2.6, .6, 1.4], R: [-2.6, .6, 1.4] } },
+  { id: 'confused',    key: null, name: 'CONFUSED', eye: 'almond', open: 1.08, lid: .06, tilt: .04, pupil: .9,  mouth: 'wavy',  blush: 0,   fx: 'question', wander: .3,  head: .09,   gaze: [.4, -.2], brows: { L: [-4.4, .6, 1.8], R: [1.2, -.4, .3] } },
+  { id: 'blank',       key: null, name: 'BLANK',  eye: 'dot',                                                    mouth: 'flat',  blush: 0,   fx: null,       wander: 0,   head: 0,     brows: { L: [-.4, 0, .2], R: [-.4, 0, .2] } },
+  { id: 'kissy',       key: null, name: 'KISSY',  eye: 'closed',                                                 mouth: 'kiss',  blush: 1,   fx: 'hearts',   wander: 0,   head: .07,   brows: { L: [-2, 1, 1.2], R: [-2, 1, 1.2] } },
+  { id: 'serene',      key: null, name: 'SERENE', eye: 'closed',                                                 mouth: 'smile', blush: .3,  fx: null,       wander: 0,   head: .04,   brows: { L: [-1, .3, 1.2], R: [-1, .3, 1.2] } },
+  { id: 'cringe',      key: null, name: 'CRINGE', eye: 'squeeze',                                                mouth: 'teeth', blush: .1,  fx: 'sweat',    wander: 0,   head: -.05,  brows: { L: [-.4, 2.4, .2], R: [-.4, 2.4, .2] } }
 ];
 const MOOD_BY = Object.fromEntries(MOODS.map(m => [m.id, m]));
 const PERSIST_FX = new Set(['zzz', 'tears']);
@@ -359,7 +426,17 @@ const VARIANTS = {
   starry:  { mouth: [[2, 'grin'], [2, 'open'], [1, 'smile'], [.8, 'o']] },
   smug:    { mouth: [[4, 'smirk'], [.8, 'blep'], [.6, 'hmm']] },
   curious: { mouth: [[3, 'hmm'], [1.5, 'o'], [1, 'smirk']] },
-  hungry:  { mouth: [[3, 'open'], [1.2, 'blep'], [1, 'o']] }
+  hungry:  { mouth: [[3, 'open'], [1.2, 'blep'], [1, 'o']] },
+  laughing: { mouth: [[3, 'open'], [2, 'grin'], [1, 'teeth']], eye: [[3, 'arc'], [1, 'squeeze']] },
+  angry:   { mouth: [[3, 'zigzag'], [2, 'teeth'], [1, 'frown']] },
+  nervous: { mouth: [[3, 'teeth'], [2, 'wavy'], [1, 'hmm']] },
+  mischievous: { mouth: [[3, 'teeth'], [2, 'smirk'], [1, 'cat']] },
+  proud:   { mouth: [[2, 'grin'], [2, 'smirk'], [1, 'smile']], eye: [[2, 'closed'], [1, 'arc']] },
+  determined: { mouth: [[3, 'flat'], [1.5, 'smirk'], [1, 'pout']] },
+  awe:     { mouth: [[3, 'o'], [1, 'open']] },
+  cringe:  { mouth: [[3, 'teeth'], [1, 'zigzag'], [1, 'wavy']] },
+  serene:  { mouth: [[3, 'smile'], [1, 'cat']] },
+  confused: { mouth: [[2, 'wavy'], [2, 'hmm'], [1, 'o']] }
 };
 const varPick = {};
 function reroll(id) {
@@ -638,6 +715,17 @@ function drawEye(side, m, t) {
       lidLash(side > 0 ? a : a.slice().reverse(), side, .7, 2.4);
       break;
     }
+    case 'x': { // knocked out
+      ctx.scale(1, Math.max(.3, sq));
+      brush([[-7.4, -6.2], [0, 0], [7.4, 6.2]], taperMid(2.4, .45));
+      brush([[-7.4, 6.2], [0, 0], [7.4, -6.2]], taperMid(2.4, .45));
+      break;
+    }
+    case 'dot': { // tiny blank stare
+      ctx.scale(1, Math.max(.1, sq));
+      ctx.beginPath(); ctx.arc(clamp(st.gx, -1, 1) * 2.5, 1 + clamp(st.gy, -1, 1) * .8, 2.7, 0, TAU); ctx.fill();
+      break;
+    }
     default: drawAlmond(side, m, sq);
   }
   ctx.restore();
@@ -677,7 +765,7 @@ function drawMouth(m, t) {
     const top = qpts(-W, y0, 0, y0 - .3, W, y0, 12), bot = cpts(W, y0, W * .85, y0 + H, -W * .85, y0 + H, -W, y0, 22), f = 13 / 35;
     brushLoop(top.concat(bot.slice(1, -1)), u => u < f ? .12 + .18 * Math.sin(Math.PI * u / f) : .12 + .26 * Math.sin(Math.PI * (u - f) / (1 - f)));
   };
-  const talking = (st.speaking || st.babble) && m.eye !== 'closed';
+  const talking = (st.speaking || st.babble) && !(m.eye === 'closed' && (m.mouth === 'snore' || m.mouth === 'wail'));
   { // her own invented mouth: stays on while she talks and stretches open with her voice
     const c = st.cust.mouth, now = performance.now(), v = custVis(c, now);
     if (v > 0) {
@@ -713,6 +801,27 @@ function drawMouth(m, t) {
       brush(qpts(-5.4, -.6, 0, 2.6, 5.4, -.6, 20), taperMid(.6, .04));
       brush(qpts(.2, 1.05, 1.5, 5.4, 3.1, .55, 14), taperMid(.5, .06));
       break;
+    }
+    case 'teeth': { // a wide toothy grin: the outline, where her teeth meet, and a few gaps
+      grin(5.8, -.8, 4.6);
+      brush(qpts(-5.1, 1.2, 0, 2, 5.1, 1.2, 16), taperMid(.4, .05));
+      for (const x of [-2.7, 0, 2.7]) brush([[x, -.45], [x, -.8 + 3.45 * (1 - (x / 5.8) * (x / 5.8)) - .35]], taperMid(.36, .08));
+      break;
+    }
+    case 'zigzag': { // gritted and jagged, trembling a little
+      const j = reduceMQ.matches ? 0 : Math.sin(t * 31) * .14, pts = [];
+      for (let i = 0; i <= 8; i++) pts.push([-6 + i * 1.5, 1 + (i % 2 ? -1 : 1) * (.9 + j)]);
+      brush(pts, taperMid(.6, .1)); break;
+    }
+    case 'bleh': { // little open mouth, tongue out
+      lens(4.2, .8, 2.2);
+      brush(qpts(-2.1, 2.7, 0, 7.8, 2.1, 2.7, 14), taperMid(.55, .08));
+      brush([[0, 3.3], [0, 5]], taperMid(.32, .05));
+      break;
+    }
+    case 'kiss': { // a puckered little 3
+      const pts = qpts(-.2, -1.2, 3.2, -1, .7, 1.4, 12).concat(qpts(.7, 1.4, 3.2, 3.8, -.2, 4, 12).slice(1));
+      brush(pts, taperMid(.62, .06)); break;
     }
     case 'frown': brush(qpts(-5, 1.8, 0, -1.4, 5, 1.8, 18), taperMid(.6, .04)); break;
     case 'pout': brush(qpts(-3.2, 1.7, 0, -.7, 3.2, 1.7, 14), taperMid(.6, .04)); break;
@@ -808,7 +917,7 @@ function drawFxItem(fx, t, age, p) {
 }
 function drawEffects(t, now) {
   ctx.save();
-  ctx.strokeStyle = COL; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = INK; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   // the mood's own lasting extra (tears while crying, zzz while asleep)
   const m = st.shown;
   if (m.fx && PERSIST_FX.has(m.fx) && st.morph < .1) drawFxItem(m.fx, t, t, 1);
@@ -833,6 +942,221 @@ function drawThinking(t) {
     ctx.globalAlpha = a; ctx.fillRect(-6.6 + i * 5.2, 30, 2.6, 2.6);
   }
   ctx.restore();
+}
+
+
+/* ================= motion graphics ================= */
+/* Big kinetic shapes around her, drawn in her current color: manga focus lines when something hits her, shockwave
+   rings, a burst of rays, speed lines when she's fired up, pulsing hearts, rain, gloom lines when she sulks, lightning
+   zigzags and steam when she's mad, a hypnotic spiral, stars orbiting her when she's knocked out, confetti, a glint
+   sweeping across her glass, nervous shake marks, a twinkling star field and a soft pulse. They play behind her face,
+   swoosh in, do their thing for a second or a few, and leave. They happen on their own with big feelings (not every
+   time, with a cooldown) and her brain can throw one in on purpose. */
+const MG = { burst: 1.1, shockwave: 1.2, focus: 1.3, speedlines: 1.8, hearts: 2.6, rain: 4, gloom: 3.2, zigzag: 1.6, steam: 2.2,
+  spiral: 3, orbit: 3.2, confetti: 3, shine: 1.1, shake: 1.6, twinkle: 3, pulse: 1.8 };
+const MOOD_MG = { shook: [.8, 'focus', 'shockwave'], angry: [.85, 'zigzag', 'steam', 'focus'], grumpy: [.45, 'steam', 'zigzag'],
+  starry: [.75, 'burst', 'twinkle'], awe: [.8, 'twinkle', 'pulse'], smitten: [.7, 'hearts'], kissy: [.85, 'hearts'],
+  sad: [.6, 'rain', 'gloom'], crying: [.85, 'rain'], sulky: [.75, 'gloom'], unimpressed: [.25, 'gloom'], dizzy: [.9, 'spiral', 'orbit'],
+  ko: [.95, 'orbit'], laughing: [.6, 'confetti', 'burst'], proud: [.8, 'shine', 'burst'], smug: [.3, 'shine'],
+  mischievous: [.5, 'shine', 'twinkle'], determined: [.75, 'speedlines', 'focus'], nervous: [.75, 'shake'], cringe: [.8, 'shake'],
+  flustered: [.5, 'shake', 'hearts'], happy: [.35, 'burst', 'confetti'], curious: [.2, 'pulse'], confused: [.3, 'pulse'],
+  serene: [.55, 'pulse'], wink: [.3, 'shine'], bleh: [.4, 'burst'] };
+const mgList = [], mgShake = { x: 0, y: 0, until: 0, amp: 0 };
+let mgLastAuto = 0, mgLastType = '';
+function spawnMG(type, secs, manual) {
+  type = String(type || '').toLowerCase().replace(/[\s-]+/g, '');
+  if (type === 'speedline') type = 'speedlines';
+  if (!MG[type] || reduceMQ.matches) return false;
+  for (let i = mgList.length - 1; i >= 0; i--) if (mgList[i].type === type) mgList.splice(i, 1);
+  const seed = []; for (let i = 0; i < 64; i++) seed.push(Math.random());
+  mgList.push({ type, t0: performance.now(), life: clamp(+secs || MG[type], .6, 12) * 1000, seed, flick: 0, dir: Math.random() < .5 ? -1 : 1, manual: !!manual });
+  if (mgList.length > 3) mgList.shift();
+  if (type === 'zigzag') { mgShake.until = performance.now() + 500; mgShake.amp = 1.6; }
+  else if (type === 'focus' || type === 'shockwave') { mgShake.until = performance.now() + 260; mgShake.amp = 1.1; }
+  dbg.mg = type; mgLastType = type;
+  return true;
+}
+/* a big feeling sometimes comes with its own motion graphic */
+function moodBeat(id) {
+  if (MOOD_HUE[id]) tint.flash = Math.max(tint.flash, FLASHY.has(id) ? 1 : .3);
+  const d = MOOD_MG[id], now = performance.now();
+  // whatever went with her last feeling bows out quickly (ones she asked for herself play on)
+  const keep = d ? d.slice(1) : [];
+  for (const m of mgList) if (!m.manual && !keep.includes(m.type)) m.life = Math.min(m.life, now - m.t0 + 320);
+  if (!d) return;
+  if (now - mgLastAuto < 2600 || Math.random() > d[0]) return;
+  const opts = d.slice(1), pickT = opts.length > 1 ? opts.filter(o => o !== mgLastType) : opts;
+  if (spawnMG(pick(pickT.length ? pickT : opts))) mgLastAuto = now;
+}
+function renderMG(now, cx, cy, s, g, faceA) {
+  // a little camera shake rides along with the hard-hitting ones
+  if (now < mgShake.until && !reduceMQ.matches) { const k = (mgShake.until - now) / 500; mgShake.x = rnd(-1, 1) * mgShake.amp * k; mgShake.y = rnd(-1, 1) * mgShake.amp * k; }
+  else { mgShake.x = 0; mgShake.y = 0; }
+  if (!mgList.length || faceA < .02) return;
+  const W = innerWidth, H = innerHeight;
+  const E = { l: -cx / s, r: (W - cx) / s, t: -cy / s, b: (H - cy) / s };   // the screen's edges in face units
+  const reach = Math.hypot(Math.max(-E.l, E.r), Math.max(-E.t, E.b)) + 6;
+  const ink = inkFor(Math.max(tint.amt, .0) * .95), glow = inkFor(tint.amt);
+  ctx.save();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
+  ctx.fillStyle = ink; ctx.strokeStyle = ink; ctx.shadowColor = glow; ctx.shadowBlur = (2 + g * 6) * DPR * Math.min(1.6, s / 3);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const A0 = faceA * .92;
+  for (let i = mgList.length - 1; i >= 0; i--) {
+    const m = mgList[i], age = (now - m.t0) / 1000, p = (now - m.t0) / m.life;
+    if (p >= 1) { mgList.splice(i, 1); continue; }
+    const R = m.seed, fadeIn = clamp(age / .12, 0, 1), fadeOut = 1 - smooth(.72, 1, p);
+    ctx.globalAlpha = A0 * fadeIn * fadeOut;
+    drawMG(m, age, p, R, E, reach, now);
+  }
+  ctx.restore();
+}
+function drawMG(m, age, p, R, E, reach, now) {
+  const A = ctx.globalAlpha;
+  switch (m.type) {
+    case 'burst': { // rays shooting out from behind her
+      for (let i = 0; i < 16; i++) {
+        const a = i / 16 * TAU + (R[i] - .5) * .25, r0 = 50 + R[i + 16] * 10, L = 24 + R[i + 32] * 22;
+        const head = r0 + easeOut(clamp(p / .5, 0, 1)) * L, tail = r0 + easeIn(clamp((p - .2) / .8, 0, 1)) * L;
+        if (head - tail < .5) continue;
+        const c = Math.cos(a), sn = Math.sin(a) * .82;
+        brush([[c * tail, sn * tail], [c * head, sn * head]], taperTo(.3, 1.6 + R[i + 48]));
+      }
+      break;
+    }
+    case 'shockwave': { // rings rippling outward
+      for (let k = 0; k < 3; k++) {
+        const q2 = clamp((age - k * .13) / .9, 0, 1); if (q2 <= 0 || q2 >= 1) continue;
+        const rr = 44 + easeOut(q2) * 90;
+        ctx.globalAlpha = A * (1 - q2); ctx.lineWidth = 1.5 * (1 - q2) + .25;
+        ctx.beginPath(); ctx.ellipse(0, 0, rr, rr * .78, 0, 0, TAU); ctx.stroke();
+      }
+      break;
+    }
+    case 'focus': { // manga focus lines closing in from the edges
+      const flick = Math.floor(age * 16);
+      for (let i = 0; i < 44; i++) {
+        const a = i / 44 * TAU + (R[i % 64] - .5) * .1, jit = ((flick * 7 + i * 13) % 17) / 17;
+        const rin = 62 + jit * 22 + (1 - easeOut(clamp(p / .25, 0, 1))) * 40, w = .6 + R[(i + 20) % 64] * 1.6;
+        const c = Math.cos(a), sn = Math.sin(a), nx = -sn, ny = c;
+        ctx.beginPath(); ctx.moveTo(c * reach + nx * w, sn * reach + ny * w); ctx.lineTo(c * reach - nx * w, sn * reach - ny * w); ctx.lineTo(c * rin, sn * rin * .82); ctx.closePath(); ctx.fill();
+      }
+      break;
+    }
+    case 'speedlines': { // streaks flying past
+      for (let i = 0; i < 18; i++) {
+        const y = E.t + (R[i] * .9 + .05) * (E.b - E.t), L = 18 + R[i + 18] * 40, span = (E.r - E.l) + L * 2;
+        const x = E.l - L + ((age * (170 + R[i + 36] * 160) + R[i + 50] * span) % span);
+        const xx = m.dir > 0 ? x : E.l + E.r - x;
+        if (Math.abs(y) < 30 && Math.abs(xx) < 52) continue;   // not across her face
+        brush([[xx - m.dir * L, y], [xx, y]], m.dir > 0 ? taperTo(.1, 1.3) : taperTo(1.3, .1));
+      }
+      break;
+    }
+    case 'hearts': { // hearts pulsing out from behind her
+      for (let k = 0; k < 4; k++) {
+        const q2 = clamp((age - k * .42) / 1.5, 0, 1); if (q2 <= 0 || q2 >= 1) continue;
+        ctx.globalAlpha = A * (1 - q2) * Math.min(1, q2 * 5); ctx.lineWidth = 1.05 * (1 - q2) + .25;
+        heartPath(0, 4, 28 + easeOut(q2) * 46); ctx.stroke();
+      }
+      break;
+    }
+    case 'rain': { // a drizzle across the whole screen
+      for (let i = 0; i < 30; i++) {
+        const x = E.l + R[i] * (E.r - E.l), span = (E.b - E.t) + 30, y = E.t - 15 + ((age * (95 + R[i + 30] * 40) + R[(i + 7) % 64] * span) % span);
+        ctx.globalAlpha = A * .6; brush([[x + 1.4, y - 9 - R[i + 20] * 6], [x, y]], taperTo(.1, .7));
+      }
+      break;
+    }
+    case 'gloom': { // wavy lines hanging over her head
+      for (let i = 0; i < 7; i++) {
+        const x = -33 + i * 11 + (R[i] - .5) * 3, top = Math.min(E.t + 2, -62), len = (24 + R[i + 7] * 16) * easeOut(clamp((age - i * .06) / .7, 0, 1));
+        const pts = []; for (let k = 0; k <= 10; k++) { const yy = top + len * k / 10; pts.push([x + Math.sin(k * .9 + age * 2 + i) * 1.1, yy]); }
+        if (len > 1) brush(pts, taperTo(1.1, .2));
+      }
+      break;
+    }
+    case 'zigzag': { // lightning flickering at her sides
+      const flick = Math.floor(age * 13);
+      for (const side of [-1, 1]) for (let k = 0; k < 2; k++) {
+        if (((flick + k + (side > 0 ? 1 : 0)) % 3) === 0) continue;
+        const x0 = side * (54 + k * 9), y0 = -30 + k * 14, pts = [[x0, y0]];
+        for (let j = 1; j <= 5; j++) pts.push([x0 + side * (((flick * 3 + j * 5 + k) % 7) - 3) * .9 + (j % 2 ? side * 3 : -side * 2), y0 + j * 6]);
+        brush(pts, taperTo(1.8, .3));
+      }
+      break;
+    }
+    case 'steam': { // puffs blowing off the top of her head
+      for (const side of [-1, 1]) for (let k = 0; k < 3; k++) {
+        const q2 = ((age * .9 + k / 3) % 1), x = side * (38 + q2 * 18), y = -26 - q2 * 22, r = 3 + q2 * 6;
+        ctx.globalAlpha = A * Math.sin(q2 * Math.PI) * .9; ctx.lineWidth = 1.3;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x + side * r * .7, y - r * .5, r * .65, 0, TAU); ctx.stroke();
+      }
+      break;
+    }
+    case 'spiral': { // a hypnotic spiral turning behind her
+      const rot = age * 2.2 * m.dir;
+      for (let arm = 0; arm < 2; arm++) {
+        const pts = []; for (let k = 0; k <= 80; k++) { const a = k / 80 * Math.PI * 5 + rot + arm * Math.PI, rr = 10 + k / 80 * 95; pts.push([Math.cos(a) * rr, Math.sin(a) * rr * .8]); }
+        ctx.globalAlpha = A * .42; brush(pts, taperTo(.2, 1.4));
+      }
+      break;
+    }
+    case 'orbit': { // little stars circling her head
+      for (let k = 0; k < 3; k++) {
+        const a = age * 4 + k * TAU / 3, x = Math.cos(a) * 34, y = -37 + Math.sin(a) * 7, z = .75 + .35 * Math.sin(a);
+        ctx.globalAlpha = A * (.55 + .45 * z); star5(x, y, 4.2 * z, 1.9 * z, a); ctx.fill();
+      }
+      break;
+    }
+    case 'confetti': { // bits tumbling down
+      for (let i = 0; i < 26; i++) {
+        const x = E.l + R[i] * (E.r - E.l) + Math.sin(age * 3 + i) * 4, y = E.t - 10 + (age * (45 + R[i + 26] * 45) + R[(i + 3) % 64] * 20);
+        const rot = age * (3 + R[(i + 11) % 64] * 5) + i, w = Math.abs(Math.cos(rot)) * 2.6 + .4;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(rot * .6);
+        if (i % 3 === 0) { sparkPath(0, 0, 1.8); ctx.fill(); } else brush([[-w, 0], [w, 0]], () => 1.1);
+        ctx.restore();
+      }
+      break;
+    }
+    case 'shine': { // a glint sweeping across her glass
+      const x = -90 + smooth(0, 1, p / .8) * 180;
+      ctx.save(); ctx.rotate(-.5);
+      ctx.globalAlpha = A * .75; brush([[x, -70], [x, 70]], taperMid(3.2, .2));
+      ctx.globalAlpha = A * .45; brush([[x + 7, -70], [x + 7, 70]], taperMid(1.2, .1));
+      ctx.restore();
+      if (p > .75) { ctx.globalAlpha = A * Math.sin((p - .75) / .25 * Math.PI); sparkPath(44, -26, 4.2); ctx.fill(); }
+      break;
+    }
+    case 'shake': { // nervous trembling marks at her sides
+      const j = Math.sin(age * 42) * 1.3;
+      for (const side of [-1, 1]) for (let k = 0; k < 3; k++) {
+        const x = side * (52 + k * 5) + j * side, y0 = -12 + k * 3;
+        brush(qpts(x, y0 - 7, x + side * 3, y0, x, y0 + 7, 10), taperMid(1.2, .2));
+      }
+      break;
+    }
+    case 'twinkle': { // a star field glittering around her
+      for (let i = 0; i < 20; i++) {
+        let x = E.l + R[i] * (E.r - E.l), y = E.t + R[i + 20] * (E.b - E.t);
+        if (Math.abs(x) < 50 && Math.abs(y) < 36) x += x < 0 ? -40 : 40;
+        const k = Math.max(0, Math.sin(age * (3 + R[i + 40] * 4) + R[(i + 9) % 64] * 6));
+        ctx.globalAlpha = A * k; sparkPath(x, y, 1.2 + k * 2.6 * (.6 + R[(i + 30) % 64]));
+        ctx.fill();
+      }
+      break;
+    }
+    case 'pulse': { // a soft breath of light around her
+      for (let k = 0; k < 2; k++) {
+        const q2 = clamp((age - k * .45) / 1.2, 0, 1); if (q2 <= 0 || q2 >= 1) continue;
+        ctx.globalAlpha = A * Math.sin(q2 * Math.PI) * .7; ctx.lineWidth = 1.1;
+        const rr = 48 + q2 * 26; ctx.beginPath(); ctx.ellipse(0, 0, rr, rr * .74, 0, 0, TAU); ctx.stroke();
+      }
+      break;
+    }
+  }
+  ctx.globalAlpha = A;
 }
 
 /* ================= her drawings (she makes every one herself) ================= */
@@ -954,7 +1278,7 @@ function renderDoodleFx(now) {
       if (still && f.pattern !== 'pop') rot = 0;
       const sz = f.size * sc;
       ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sz, sz);
-      ctx.globalAlpha *= clamp(al, 0, 1); ctx.lineWidth = 1.15 / sz; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = COL;
+      ctx.globalAlpha *= clamp(al, 0, 1); ctx.lineWidth = 1.15 / sz; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = INK;
       strokePartial(f.shape.polys, f.shape.len * easeOut(clamp(age / .35, 0, 1)));
       ctx.restore();
     }
@@ -1245,7 +1569,7 @@ addEventListener('resize', resize); resize();
 
 function drawStrokes(t) {
   const m = st.shown;
-  ctx.fillStyle = COL; ctx.strokeStyle = COL; ctx.shadowColor = COL;
+  ctx.fillStyle = INK; ctx.strokeStyle = INK; ctx.shadowColor = GLOWC;
   drawBrow(-1, st.brow.L); drawBrow(1, st.brow.R);
   drawEye(-1, m, t); drawEye(1, m, t);
   drawMouth(m, t);
@@ -1265,20 +1589,32 @@ function renderFace(now) {
   const r = st.region, s = faceScale() * roam.z, cx = r.x + r.w / 2 + roam.x, cy = r.y + r.h / 2 + r.h * .02 + roam.y;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
   const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
-  const layer = (blur, alpha, withFx) => {
+  const layer = (blur, alpha, withFx, halo) => {
     if (faceA < .02) return;
     alpha *= faceA;
+    // the halo pass carries her mood color; the crisp pass stays white, tinted only for a beat on big feelings
+    INK = halo ? inkFor(tint.amt * .9) : inkFor(tint.amt * .06 + tint.flash * .6);
+    GLOWC = inkFor(tint.amt * (halo ? 1 : .9));
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
-    ctx.translate(ox + st.danceX, oy); ctx.rotate(st.head + st.danceTilt + roam.tilt);
+    ctx.translate(ox + st.danceX + mgShake.x, oy + mgShake.y); ctx.rotate(st.head + st.danceTilt + roam.tilt);
     ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
-    if (withFx) { ctx.fillStyle = COL; drawEffects(t, now); }
+    if (withFx) { ctx.fillStyle = INK; drawEffects(t, now); }
     ctx.restore();
   };
-  if (g > 0) layer(g * s * DPR * 5.5, .5 * Math.min(1, g * 1.4), true);
-  layer(s * DPR * .9 * (.3 + g), 1, true);
+  // a soft wash of her color on the glass behind her
+  if (tint.amt > .02 && g > 0 && faceA > .02) {
+    ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, 78 * s);
+    gr.addColorStop(0, inkFor(1, .085 * tint.amt * g * faceA)); gr.addColorStop(1, inkFor(1, 0));
+    ctx.fillStyle = gr; ctx.fillRect(cx - 80 * s, cy - 80 * s, 160 * s, 160 * s); ctx.restore();
+  }
+  renderMG(now, cx, cy, s, g, faceA);
+  if (g > 0) layer(g * s * DPR * 5.5, .5 * Math.min(1, g * 1.4), true, true);
+  layer(s * DPR * .9 * (.3 + g), 1, true, false);
+  INK = COL; GLOWC = COL;
   // pop-up text above her head
   if (scr.pop) {
     const p = (now - scr.pop.t0) / 1700;
@@ -1379,7 +1715,7 @@ function composite(now) {
     mctx.restore();
   }
   if (scr.flashA > .005) {
-    mctx.save(); mctx.globalAlpha = scr.flashA; mctx.fillStyle = COL; mctx.fillRect(0, 0, W, H); mctx.restore();
+    mctx.save(); mctx.globalAlpha = scr.flashA; mctx.fillStyle = inkFor(tint.amt * .8); mctx.fillRect(0, 0, W, H); mctx.restore();
     scr.flashA *= .86;
   }
 }
@@ -1427,6 +1763,7 @@ function eyeStyle(m) { return (m.eye || '') + '/' + (m.eyeR || ''); }
 function swapTo(m, squash) {
   const prevId = st.shown && st.shown.id;
   st.shown = m;
+  { const was = String(prevId || '').split(/[+\/]/)[0], now = String(m.id || '').split(/[+\/]/)[0]; if (was !== now) moodBeat(now); }
   if (prevId !== m.id && m.fx && !PERSIST_FX.has(m.fx)) spawnFx(m.fx);
   if (reduceMQ.matches) return;
   st.popV += 16; st.hopV -= 40;
@@ -1467,7 +1804,7 @@ function update(now, dt) {
   }
 
   // blinking (a quick squash also hides swaps between different eye styles)
-  if (st.blinkStart < 0 && now > st.nextBlink && st.shown.eye !== 'closed' && st.shown.eye !== 'spiral') st.blinkStart = now;
+  if (st.blinkStart < 0 && now > st.nextBlink && st.shown.eye !== 'closed' && st.shown.eye !== 'spiral' && st.shown.eye !== 'x') st.blinkStart = now;
   if (st.blinkStart >= 0) {
     const p = (now - st.blinkStart) / (st.pending ? 150 : 190);
     if (p >= .45 && st.pending) { swapTo(st.pending, true); st.pending = null; st.blinkStart = -1; st.closure = 0; st.nextBlink = now + 2400 + Math.random() * 3000; }
@@ -1948,6 +2285,9 @@ function applyFace(p = {}) {
   const sc = String(p.screen || '').toLowerCase();
   if (sc && sc !== 'none') screenCue(sc);
   if (p.text) showPop(p.text);
+  if (p.color) wearColor(p.color, p.color_seconds);
+  const mo = String(p.motion || '').toLowerCase();
+  if (mo && mo !== 'none') spawnMG(mo, null, true);
   syncLab();
 }
 function effect(fx) {
@@ -2207,18 +2547,34 @@ function onVoiceMessage(msg) {
   }
 }
 /* the emotion tags in her lines ([smug], [laugh], [sigh]...) steer her face as she says them */
-const TAG_MOOD = { smug: 'smug', smirk: 'smug', smirks: 'smug', sarcastic: 'smug', proud: 'smug', mischievous: 'smug', confident: 'smug',
-  grumpy: 'grumpy', angry: 'grumpy', mad: 'grumpy', huffs: 'grumpy', huff: 'grumpy', pouts: 'grumpy', pout: 'grumpy',
+const TAG_MOOD = { smug: 'smug', smirk: 'smug', smirks: 'smug', sarcastic: 'smug', confident: 'smug', cocky: 'smug',
+  mischievous: 'mischievous', scheming: 'mischievous', sly: 'mischievous', plotting: 'mischievous', 'evil laugh': 'mischievous', devious: 'mischievous',
+  grumpy: 'grumpy', huffs: 'grumpy', huff: 'grumpy', pouts: 'grumpy', pout: 'grumpy', irritated: 'grumpy',
+  angry: 'angry', mad: 'angry', furious: 'angry', yelling: 'angry', shouting: 'angry', frustrated: 'angry', growls: 'angry', fuming: 'angry',
   annoyed: 'unimpressed', unimpressed: 'unimpressed', deadpan: 'unimpressed', sigh: 'unimpressed', sighs: 'unimpressed', bored: 'unimpressed', 'eye roll': 'unimpressed',
-  flustered: 'flustered', embarrassed: 'flustered', nervous: 'flustered', shy: 'flustered', blushing: 'flustered',
+  flustered: 'flustered', embarrassed: 'flustered', shy: 'flustered', blushing: 'flustered',
+  nervous: 'nervous', anxious: 'nervous', awkward: 'nervous', worried: 'nervous', uneasy: 'nervous', 'nervous laugh': 'nervous', gulps: 'nervous',
   shook: 'shook', shocked: 'shook', surprised: 'shook', gasp: 'shook', gasps: 'shook', scared: 'shook', startled: 'shook',
-  laugh: 'happy', laughs: 'happy', laughing: 'happy', giggle: 'happy', giggles: 'happy', happy: 'happy', cheerful: 'happy', chuckles: 'happy',
-  excited: 'starry', amazed: 'starry', starry: 'starry', delighted: 'starry', hyped: 'starry',
-  sad: 'sad', disappointed: 'sad', crying: 'crying', cries: 'crying', sobs: 'crying',
+  laugh: 'laughing', laughs: 'laughing', laughing: 'laughing', giggle: 'laughing', giggles: 'laughing', chuckles: 'laughing', cackles: 'laughing', snorts: 'laughing',
+  happy: 'happy', cheerful: 'happy', joyful: 'happy', grinning: 'happy',
+  excited: 'starry', starry: 'starry', delighted: 'starry', hyped: 'starry', thrilled: 'starry',
+  amazed: 'awe', awe: 'awe', 'in awe': 'awe', wow: 'awe', mesmerized: 'awe', impressed: 'awe', starstruck: 'awe',
+  proud: 'proud', triumphant: 'proud', victorious: 'proud', boastful: 'proud', 'show off': 'proud',
+  determined: 'determined', focused: 'determined', serious: 'determined', 'fired up': 'determined', competitive: 'determined',
+  sad: 'sad', disappointed: 'sad', crying: 'crying', cries: 'crying', sobs: 'crying', sobbing: 'crying',
+  sulking: 'sulky', sulks: 'sulky', sulky: 'sulky', hurt: 'sulky', offended: 'sulky',
   curious: 'curious', whisper: 'curious', whispers: 'curious', intrigued: 'curious', suspicious: 'curious',
+  confused: 'confused', puzzled: 'confused', huh: 'confused', baffled: 'confused',
+  speechless: 'blank', blank: 'blank', stunned: 'blank', dumbfounded: 'blank',
   thinking: 'thinking', hmm: 'thinking', pondering: 'thinking', thoughtful: 'thinking',
   sleepy: 'sleepy', yawn: 'sleepy', yawns: 'sleepy', tired: 'sleepy',
-  teasing: 'wink', playful: 'wink', wink: 'wink', flirty: 'smitten', smitten: 'smitten', dreamy: 'smitten', affectionate: 'smitten', soft: 'smitten',
+  teasing: 'wink', playful: 'wink', wink: 'wink', winks: 'wink',
+  silly: 'bleh', goofy: 'bleh', bleh: 'bleh', raspberry: 'bleh', 'tongue out': 'bleh',
+  flirty: 'smitten', smitten: 'smitten', dreamy: 'smitten', affectionate: 'smitten', soft: 'smitten', lovestruck: 'smitten',
+  kiss: 'kissy', kisses: 'kissy', mwah: 'kissy', kissy: 'kissy',
+  content: 'serene', peaceful: 'serene', serene: 'serene', gentle: 'serene', soothing: 'serene', warmly: 'serene',
+  cringe: 'cringe', cringes: 'cringe', yikes: 'cringe', grimace: 'cringe', grimaces: 'cringe', winces: 'cringe',
+  dead: 'ko', defeated: 'ko', 'knocked out': 'ko', ko: 'ko', wrecked: 'ko', dying: 'ko',
   chill: 'chill', calm: 'chill', relaxed: 'chill', dizzy: 'dizzy', hungry: 'hungry' };
 let tagTimers = [];
 const tagQ = { list: [], key: '', firstKey: '', base: 0 };
@@ -2269,9 +2625,9 @@ function volumeWords(text) {
 function guessMood(text) {
   const t = text.toLowerCase();
   let m = null;
-  if (/\b(haha|hehe|lol|lmao)\b/.test(t)) m = wpick([[1, 'happy'], [1, 'wink'], [.8, 'smug'], [.6, 'flustered']]);
+  if (/\b(haha|hehe|lol|lmao)\b/.test(t)) m = wpick([[1, 'laughing'], [.6, 'happy'], [1, 'wink'], [.8, 'smug'], [.6, 'flustered'], [.4, 'mischievous']]);
   else if (/\b(ugh|seriously|really\?)\b/.test(t)) m = 'unimpressed';
-  else if (/\b(wait|what\?|whoa|no way)\b/.test(t)) m = 'shook';
+  else if (/\b(wait|what\?|whoa|no way)\b/.test(t)) m = wpick([[2, 'shook'], [1, 'awe'], [.6, 'confused']]);
   else if (/\b(aw+|sorry|oh no)\b/.test(t)) m = 'sad';
   else if (/\b(hmm+|let me think|i wonder)\b/.test(t)) m = 'thinking';
   else if (/\?\s*$/.test(t)) m = 'curious';
@@ -2285,14 +2641,17 @@ let simVoice = null;   // only for test videos: a fake voice level and mouth sha
 /* her mouth, timed to the actual audio. Every chunk of her voice arrives as raw samples with the timing of each
    letter. The page measures how loud each 20 ms slice is and lines the chunks up end to end the way the speaker plays
    them, so at any moment it knows exactly how open her mouth should be and which letter she's on. */
-const tl = { chunks: [], end: 0, ref: .08, pendingAlign: null, rate: 0 };
+const tl = { chunks: [], past: [], end: 0, ref: .08, pendingAlign: null, rate: 0 };
 const RATES = [8000, 16000, 22050, 24000, 44100, 48000];
-function tlReset() { tl.chunks = []; tl.end = 0; tl.pendingAlign = null; tl.pushChars = 0; tagQ.list = []; }
+function tlReset() { tl.chunks = []; tl.past = []; tl.end = 0; tl.pendingAlign = null; tl.pushChars = 0; tagQ.list = []; }
 function outLatency() {
   let l = 0;
   try { for (const c of (window.__lumiACs || [])) if (c.state === 'running') l = Math.max(l, (c.outputLatency || 0) + (c.baseLatency || 0)); } catch (e) {}
   return clamp(l * 1000, 40, 260);
 }
+/* from the player to your ears: the speaker's own delay, the hop through the page's audio element, and your manual
+   nudge from the menu (Bluetooth earbuds can add a bit) */
+function heardDelay() { return outLatency() + 15 + (+S.lipMs || 0); }
 function onAudioChunk(b64) {
   let bin; try { bin = atob(b64); } catch (e) { return; }
   const n = bin.length >> 1; if (!n) return;
@@ -2311,15 +2670,15 @@ function onAudioChunk(b64) {
   }
   const now = performance.now(), dur = n / rate * 1000;
   if (!tl.chunks.length && now > tl.end) { tl.pushChars = 0; tl.utter = (tl.utter || 0) + 1; }   // a new stretch of speech starts
-  const start = Math.max(now + (voice.kind === 'webrtc' ? 0 : outLatency()), tl.end);
+  const start = Math.max(now + (voice.kind === 'webrtc' ? 0 : heardDelay()), tl.end);
   const charBase = tl.pushChars || 0; tl.pushChars = charBase + (al && al.chars ? al.chars.length : 0);
-  tl.chunks.push({ start, dur, env, al, charBase });
+  tl.chunks.push({ start, dur, env, al, charBase, arr: now });
   tl.end = start + dur;
   if (tl.chunks.length > 80) tl.chunks.shift();
   dbg.chunks = (dbg.chunks || 0) + 1;
 }
 function tlSample(now) {
-  while (tl.chunks.length && tl.chunks[0].start + tl.chunks[0].dur < now) tl.chunks.shift();
+  while (tl.chunks.length && tl.chunks[0].start + tl.chunks[0].dur < now) { tl.past.push(tl.chunks.shift()); if (tl.past.length > 40) tl.past.shift(); }
   const c = tl.chunks[0]; if (!c || now < c.start) return null;
   const off = now - c.start, rms = c.env[Math.min(c.env.length - 1, Math.floor(off / 20))] || 0;
   tl.ref = Math.max(.1, tl.ref * .9993, rms);
@@ -2333,6 +2692,111 @@ function tlSample(now) {
   return { level, vis, spoken };
 }
 function tlActive(now) { return tl.chunks.some(c => now >= c.start && now < c.start + c.dur); }
+
+/* ---- her mouth follows what's actually playing ----
+   The voice library plays her through an analyser right before her voice leaves for the speaker. Every frame the page
+   notes how loud she is in the player at that moment, and her mouth shows it one output-delay later, when it reaches
+   your ears. So a network hiccup, a stall or an early stop can't leave her mouth moving in silence or trailing behind.
+   The letter timeline (mouth shapes, face changes on the right word) is kept lined up with the player as well: it's
+   snapped to the moments playback really starts and stops, and nudged by matching its loudness pattern to the player's. */
+const live = { conv: null, an: null, buf: null, rate: 48000, hist: [], ever: false, broken: false, zeroN: 0, playing: false, idleAt: 0, lastSync: 0, fixes: 0, drift: 0, syncR: 0 };
+function liveHook() {
+  const c = voice.conv;
+  if (!c || live.conv === c) return;
+  Object.assign(live, { conv: c, an: null, hist: [], ever: false, broken: false, zeroN: 0, playing: false, idleAt: 0 });
+  try {
+    const o = c.output, an = o && (typeof o.getAnalyser === 'function' ? o.getAnalyser() : o.analyser);
+    if (an && typeof an.getFloatTimeDomainData === 'function') { live.an = an; live.buf = new Float32Array(an.fftSize || 2048); live.rate = (an.context && an.context.sampleRate) || 48000; }
+    const target = c.playbackEventTarget || o;
+    if (target && typeof target.addListener === 'function') target.addListener(e => { const d = e && e.data; if (d && d.type === 'process') livePlayback(!d.finished); });
+  } catch (e) {}
+  dbg.live = !!live.an;
+}
+function liveGain() { const o = live.conv && live.conv.output, v = o && isFinite(o.volume) ? o.volume : (S.herVol == null ? 1 : S.herVol); return Math.max(.02, v); }
+function liveTick(now) {
+  if (!live.an || live.broken) return;
+  let rms = 0;
+  try {
+    live.an.getFloatTimeDomainData(live.buf);
+    const n = Math.min(live.buf.length, Math.max(64, Math.round(live.rate * .02))); let s2 = 0;
+    for (let i = live.buf.length - n; i < live.buf.length; i++) s2 += live.buf[i] * live.buf[i];
+    rms = Math.sqrt(s2 / n);
+  } catch (e) { live.an = null; return; }
+  // in her own units, before the volume knob (but a fade-out still shows as quieter)
+  const pre = rms / liveGain();
+  live.hist.push({ t: now - 10, r: pre });
+  while (live.hist.length && now - live.hist[0].t > 3000) live.hist.shift();
+  if (pre > .004) live.ever = true;
+  // an analyser that stays dead silent while the player says it's playing isn't wired up: fall back to the timeline
+  if (!live.ever) { live.zeroN = (live.playing || tlActive(now)) && rms === 0 ? live.zeroN + 1 : 0; if (live.zeroN > 45) { live.broken = true; dbg.liveBroken = true; } }
+}
+function liveAt(t) {
+  const h = live.hist, n = h.length; if (n < 2 || t < h[0].t) return null;
+  if (t >= h[n - 1].t) return h[n - 1].r;
+  let i = n - 1; while (i > 1 && h[i - 1].t > t) i--;
+  const a = h[i - 1], b = h[i], k = b.t > a.t ? clamp((t - a.t) / (b.t - a.t), 0, 1) : 0;
+  return a.r + (b.r - a.r) * k;
+}
+function levelOf(rms) { return rms < .025 || rms < tl.ref * .2 ? 0 : clamp(Math.pow(rms / (tl.ref * .7), .85), 0, 1); }
+/* how open her mouth should be at moment t (what you hear then), from the real player; null if we can't tell */
+function liveLevel(t) {
+  if (!live.an || live.broken) return null;   // trusted from her first word; a dead analyser gets caught and dropped
+  const r = liveAt(t - heardDelay()); if (r == null) return null;
+  tl.ref = Math.max(.1, tl.ref, r);
+  return levelOf(r);
+}
+/* the player started or ran dry: line the timeline up with it */
+function livePlayback(playing) {
+  const now = performance.now(), d = heardDelay();
+  live.playing = playing;
+  if (!playing) {
+    live.idleAt = now - 30;
+    // nothing that was already queued keeps playing after now + delay
+    const endAt = now + d;
+    tl.chunks = tl.chunks.filter(c => c.arr > now - 30 || c.start < endAt - 5);
+    for (const c of tl.chunks) if (c.arr <= now - 30 && c.start + c.dur > endAt) c.dur = Math.max(0, endAt - c.start);
+    tl.end = tl.chunks.reduce((m, c) => Math.max(m, c.start + c.dur), Math.min(tl.end, endAt));
+    return;
+  }
+  // it started again: the first chunk that arrived after it went quiet is starting right now
+  const i = tl.chunks.findIndex(c => c.arr >= live.idleAt);
+  if (i < 0) return;
+  if (i > 0) tl.past.push(...tl.chunks.splice(0, i));
+  const shift = (now + d) - tl.chunks[0].start;
+  if (Math.abs(shift) > 20) { for (const c of tl.chunks) c.start += shift; tl.end += shift; live.fixes++; dbg.liveFix = Math.round(shift); }
+}
+function pearson(a, b) {
+  const n = a.length; let ma = 0, mb = 0; for (let i = 0; i < n; i++) { ma += a[i]; mb += b[i]; } ma /= n; mb /= n;
+  let sab = 0, saa = 0, sbb = 0; for (let i = 0; i < n; i++) { const x = a[i] - ma, y = b[i] - mb; sab += x * y; saa += x * x; sbb += y * y; }
+  return saa > 1e-9 && sbb > 1e-9 ? sab / Math.sqrt(saa * sbb) : -2;
+}
+/* every so often while she talks: slide the timeline until its loudness pattern matches what the player really played */
+function liveSync(now) {
+  if (!live.an || !live.ever || live.broken || now - live.lastSync < 300 || !tl.chunks.length) return;
+  live.lastSync = now;
+  const d = heardDelay(), H = live.hist.filter(q2 => now - q2.t < 1500);
+  if (H.length < 40) return;
+  const A = H.map(q2 => q2.r);
+  if (Math.max(...A) < tl.ref * .3) return;   // she wasn't really saying anything in this stretch
+  const C = tl.past.concat(tl.chunks).sort((x, y) => x.start - y.start);
+  let best = 0, bestR = -2, r0 = -2;
+  for (let off = -240; off <= 240; off += 10) {
+    const E = new Array(H.length); let j = 0;
+    for (let i = 0; i < H.length; i++) {
+      const T = H[i].t + d - off;
+      while (j < C.length && C[j].start + C[j].dur <= T) j++;
+      const c = C[j]; E[i] = c && T >= c.start ? (c.env[Math.min(c.env.length - 1, Math.floor((T - c.start) / 20))] || 0) : 0;
+    }
+    const r = pearson(A, E); if (off === 0) r0 = r;
+    if (r > bestR) { bestR = r; best = off; }
+  }
+  live.drift = best; live.syncR = +bestR.toFixed(2);
+  if (bestR > .6 && bestR - r0 > .04 && Math.abs(best) >= 20) {
+    const sh = best * (Math.abs(best) > 80 ? 1 : .7);
+    for (const c of C) c.start += sh; tl.end += sh; live.fixes++; dbg.liveFix = Math.round(sh);
+  }
+}
+
 
 /* when no sound levels reach the page, her mouth follows the words she's saying at about her speaking pace */
 function textMouth(now) {
@@ -2351,6 +2815,7 @@ function textMouth(now) {
 function sampleVoice() {
   if (simVoice) { voice.outLevel = simVoice.level || 0; voice.outShape = simVoice.shape || 'A'; return; }
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
+  liveHook(); liveTick(performance.now()); liveSync(performance.now());
   try { voice.inLevel = voice.muted ? 0 : clamp(c.getInputVolume() || 0, 0, 1); } catch (e) {}
   const now = performance.now();
   if (voice.inLevel > .12) { poke(); voice.lastHeard = now; auto.unanswered = 0; if (!cutin.since && !st.speaking) cutin.since = now; }
@@ -2366,13 +2831,15 @@ function sampleVoice() {
   cueTick(now);
   if (!st.speaking && tlActive(now)) { st.speaking = true; st.thinking = false; voice.talkT0 = now; setState('TALKING'); }
   if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; voice.deadN = 0; return; }
-  const ts = tlSample(now + 35);
-  if (ts) {
-    if (ts.spoken >= 0) tagTick(ts.spoken);
+  const ts = tlSample(now + 35), lv = voice.kind === 'webrtc' ? null : liveLevel(now + 35);
+  if (ts || lv != null) {
+    if (ts && ts.spoken >= 0) tagTick(ts.spoken);
     voice.deadN = 0;
-    voice.outLevel = lerp(voice.outLevel, ts.level, ts.level > voice.outLevel ? .55 : .3); dbg.peakOut = Math.max(dbg.peakOut, ts.level);
-    if (ts.vis) { lip.vis = ts.vis; lip.lastAlign = now; }
-    else { lip.vis = ''; lip.lastAlign = 0; const shp = ts.level > .7 ? 'A' : ts.level > .45 ? 'E' : ts.level > .2 ? 'C' : 'U'; if (now > (voice.shapeHold || 0)) { voice.outShape = shp; voice.shapeHold = now + 70; } }
+    // how open: what the player really played (when we can see it), else the timeline's own loudness
+    const level = lv != null ? lv : ts.level; dbg.mouthSrc = lv != null ? 'live' : 'timeline';
+    voice.outLevel = lerp(voice.outLevel, level, level > voice.outLevel ? .55 : .3); dbg.peakOut = Math.max(dbg.peakOut, level);
+    if (ts && ts.vis && level > 0) { lip.vis = ts.vis; lip.lastAlign = now; }
+    else { lip.vis = ''; lip.lastAlign = 0; const shp = level > .7 ? 'A' : level > .45 ? 'E' : level > .2 ? 'C' : 'U'; if (now > (voice.shapeHold || 0)) { voice.outShape = shp; voice.shapeHold = now + 70; } }
     voice.outEma = lerp(voice.outEma || 0, voice.outLevel, .06);
     if (voice.outLevel > .72 && voice.outLevel > voice.outEma + .3 && now - (voice.lastPunch || 0) > 420) { voice.lastPunch = now; bump(.32); }
     return;
@@ -3920,6 +4387,7 @@ for (const fx of EFFECTS) $('#fxGrid').append(mkBtn(FX_LABEL[fx] || fx.toUpperCa
 for (const sc of SCREENS) $('#scrGrid').append(mkBtn(sc.replace('_', ' ').toUpperCase(), () => {
   if (sc === 'power_off' && (scr.power === 'off')) powerOn(); else screenCue(sc);
 }));
+for (const mg of Object.keys(MG)) $('#scrGrid').append(mkBtn('~' + mg.toUpperCase(), () => spawnMG(mg, null, true)));
 $('#popBtn').addEventListener('click', () => showPop($('#popText').value));
 $('#popText').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); showPop(e.target.value); } });
 $('#babbleBtn').addEventListener('click', e => { st.babble = !st.babble; e.target.setAttribute('aria-pressed', String(st.babble)); e.target.textContent = st.babble ? 'ON' : 'OFF'; });
@@ -3948,6 +4416,10 @@ $('#herVolBtn').addEventListener('click', () => {
   try { voice.conv && voice.conv.setVolume({ volume: S.herVol }); } catch (e) {}
 });
 renderVolBtn();
+const LIP_STEPS = [0, 40, 80, 130, 190, -40];
+function renderLipBtn() { const v = +S.lipMs || 0; $('#lipBtn').textContent = v === 0 ? 'IN SYNC' : v > 0 ? 'LATER +' + v + 'MS' : 'EARLIER ' + v + 'MS'; }
+$('#lipBtn').addEventListener('click', () => { const i = LIP_STEPS.indexOf(+S.lipMs || 0); S.lipMs = LIP_STEPS[(i + 1) % LIP_STEPS.length]; saveSettings(); renderLipBtn(); });
+renderLipBtn();
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });
@@ -3991,7 +4463,7 @@ function frame(now) {
   trackObjects(now);
   autonomyTick(now); needsTick(now); dreamTick(now); roamTick(now, dt); standbyTick(now);
   danceTick(now); gamesTick(now, dt);
-  update(now, dt);
+  update(now, dt); tintTick(now, dt);
   renderFace(now);
   composite(now);
   renderVU();
@@ -4032,7 +4504,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

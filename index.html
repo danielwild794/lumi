@@ -1259,7 +1259,7 @@ function renderFace(now) {
   ctx = fctx;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, fc.width, fc.height);
-  const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
+  const r = st.region, s = faceScale() * roam.z, cx = r.x + r.w / 2 + roam.x, cy = r.y + r.h / 2 + r.h * .02 + roam.y;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
   const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
   const layer = (blur, alpha, withFx) => {
@@ -1267,7 +1267,7 @@ function renderFace(now) {
     alpha *= faceA;
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
-    ctx.translate(ox + st.danceX, oy); ctx.rotate(st.head + st.danceTilt);
+    ctx.translate(ox + st.danceX, oy); ctx.rotate(st.head + st.danceTilt + roam.tilt);
     ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
@@ -1548,7 +1548,8 @@ function idleLife(now) {
   const hour = new Date().getHours(), late = hour >= 23 || hour < 6;
   const beats = [
     ['look', 3], ['hum', 2 * (needs.energy > .4 ? 1 : .3)], ['blinks', 2], ['curious', 1], ['yawn', (late ? 3 : .4) + (needs.energy < .35 ? 4 : 0)], ['smirk', 1],
-    ['sigh', needs.boredom * 4], ['sulk', needs.social < .35 ? 2.5 : 0], ['bounce', needs.hype > .6 ? 3 : 0]
+    ['sigh', needs.boredom * 4], ['sulk', needs.social < .35 ? 2.5 : 0], ['bounce', needs.hype > .6 ? 3 : 0],
+    ['roam', 1.2 + needs.boredom * 2 + needs.hype]
   ];
   let tot = beats.reduce((s2, b) => s2 + b[1], 0), roll = Math.random() * tot, pickB = 'look';
   for (const [b, w] of beats) { roll -= w; if (roll <= 0) { pickB = b; break; } }
@@ -1561,6 +1562,7 @@ function idleLife(now) {
   else if (pickB === 'sigh') { react(pick(['unimpressed', 'chill']), 2000); st.tgx = pick([-1, 1]); st.tgy = .5; st.nextLook = now + 1800; }
   else if (pickB === 'sulk') { react('sad', 1700); setTimeout(() => { st.tgx = 0; st.tgy = 0; st.nextLook = performance.now() + 1500; }, 900); }
   else if (pickB === 'bounce') { bump(.7); react(pick(['starry', 'smug', 'happy']), 1300); }
+  else if (pickB === 'roam') roamIdle();
 }
 
 /* ================= her own initiative ================= */
@@ -1780,6 +1782,77 @@ async function webTool(p = {}) {
   }
 }
 
+
+/* ================= she moves around her screen ================= */
+/* Her whole face can slide anywhere: edges and corners, peeking in from a side, leaning in close, backing away,
+   wandering, or bouncing off the walls. She moves when her brain decides to, on her own when she's restless, and
+   when you fling her with a swipe. */
+const roam = { x: 0, y: 0, z: 1, vx: 0, vy: 0, vz: 0, tx: 0, ty: 0, tz: 1, k: 60, mode: 'hold', until: 0, next: 0, dvx: 0, dvy: 0, tilt: 0, place: 'center' };
+const PLACES = ['center', 'left', 'right', 'top', 'bottom', 'top_left', 'top_right', 'bottom_left', 'bottom_right',
+  'peek_left', 'peek_right', 'peek_bottom', 'peek_top', 'close', 'far', 'hide', 'wander', 'dvd', 'random'];
+function roamBox(z) {
+  const r = st.region, sc = faceScale() * (z || roam.z), hw = 54 * sc, hh = 36 * sc;
+  return { r, hw, hh, mx: Math.max(0, r.w / 2 - hw), my: Math.max(0, r.h / 2 - hh) };
+}
+function roamTo(place, opts = {}) {
+  place = String(place || 'center').toLowerCase().replace(/[\s-]+/g, '_');
+  if (!PLACES.includes(place)) place = 'random';
+  const now = performance.now();
+  roam.k = { slow: 22, normal: 60, fast: 150 }[opts.speed] || 60; roam.mode = 'hold'; roam.tz = 1;
+  const B = roamBox(1), at = (x, y) => { roam.tx = x; roam.ty = y; };
+  switch (place) {
+    case 'center': at(0, 0); break;
+    case 'left': at(-B.mx, 0); break; case 'right': at(B.mx, 0); break;
+    case 'top': at(0, -B.my); break; case 'bottom': at(0, B.my); break;
+    case 'top_left': at(-B.mx, -B.my); break; case 'top_right': at(B.mx, -B.my); break;
+    case 'bottom_left': at(-B.mx, B.my); break; case 'bottom_right': at(B.mx, B.my); break;
+    case 'peek_left': at(-B.r.w / 2 - B.hw * .35, rnd(-.2, .2) * B.my); break;
+    case 'peek_right': at(B.r.w / 2 + B.hw * .35, rnd(-.2, .2) * B.my); break;
+    case 'peek_bottom': at(rnd(-.3, .3) * B.mx, B.r.h / 2 + B.hh * .3); break;
+    case 'peek_top': at(rnd(-.3, .3) * B.mx, -B.r.h / 2 - B.hh * .3); break;
+    case 'close': at(0, 0); roam.tz = 1.45; break;
+    case 'far': at(rnd(-.4, .4) * B.mx, rnd(-.3, .3) * B.my); roam.tz = .55; break;
+    case 'hide': at((Math.random() < .5 ? -1 : 1) * (B.r.w / 2 + B.hw * 1.4), 0); break;
+    case 'random': at(rnd(-1, 1) * B.mx, rnd(-1, 1) * B.my); break;
+    case 'wander': roam.mode = 'wander'; roam.next = 0; break;
+    case 'dvd': { roam.mode = 'dvd'; roam.tz = .7; const a = rnd(0, TAU), v = { slow: 90, normal: 170, fast: 300 }[opts.speed] || 170; roam.dvx = Math.cos(a) * v; roam.dvy = Math.sin(a) * v; break; }
+  }
+  const secs = isFinite(+opts.seconds) && +opts.seconds > 0 ? clamp(+opts.seconds, 1, 120) : (place === 'wander' || place === 'dvd' ? 8 : place === 'hide' ? 4 : 0);
+  roam.until = secs ? now + secs * 1000 : 0;
+  roam.place = place; dbg.roam = place;
+  return place;
+}
+function roamHome() { roam.mode = 'hold'; roam.tx = 0; roam.ty = 0; roam.tz = 1; roam.k = 40; roam.until = 0; roam.place = 'center'; }
+function roamFling(dx, dy, ms) {
+  if (reduceMQ.matches) return;
+  const v = 1000 / Math.max(ms, 60);
+  roam.vx += clamp(dx * v * .5, -2500, 2500); roam.vy += clamp(dy * v * .5, -2500, 2500);
+}
+function roamTick(now, dt) {
+  if (game || arc || ttt || (drawing && drawing.where === 'full')) { if (roam.place !== 'center') roamHome(); }
+  if (roam.until && now > roam.until) roamHome();
+  const B = roamBox();
+  if (roam.mode === 'wander' && now > roam.next) { roam.next = now + rnd(1200, 2600); roam.tx = rnd(-1, 1) * B.mx; roam.ty = rnd(-1, 1) * B.my; roam.k = 30; }
+  if (roam.mode === 'dvd') {
+    roam.x += roam.dvx * dt; roam.y += roam.dvy * dt;
+    if (Math.abs(roam.x) > B.mx) { roam.x = Math.sign(roam.x) * B.mx; roam.dvx *= -1; bump(.3); }
+    if (Math.abs(roam.y) > B.my) { roam.y = Math.sign(roam.y) * B.my; roam.dvy *= -1; bump(.3); }
+    roam.vx = roam.dvx; roam.vy = 0;
+  } else {
+    // a little springy, like she's actually scooting over
+    const k = roam.k, c = 2 * Math.sqrt(k) * .8;
+    roam.vx += (k * (roam.tx - roam.x) - c * roam.vx) * dt; roam.vy += (k * (roam.ty - roam.y) - c * roam.vy) * dt;
+    roam.x += roam.vx * dt; roam.y += roam.vy * dt;
+  }
+  roam.vz += (90 * (roam.tz - roam.z) - 2 * Math.sqrt(90) * roam.vz) * dt; roam.z = clamp(roam.z + roam.vz * dt, .35, 1.8);
+  roam.tilt = lerp(roam.tilt, clamp(-roam.vx / 2600, -.22, .22), .2);
+}
+/* left to herself, she sometimes scoots somewhere else on her screen */
+function roamIdle() {
+  const opts = [['random', 3], ['peek_left', 1], ['peek_right', 1], ['peek_bottom', .7], ['wander', needs.hype > .6 ? 2 : .5], ['close', .6], ['far', .5], ['top', .5], ['bottom', .5]];
+  roamTo(wpick(opts), { speed: needs.energy < .35 ? 'slow' : pick(['slow', 'normal', 'normal']), seconds: rnd(4, 9) });
+}
+
 /* ================= the face call (from her brain, or the Face Lab) ================= */
 let lastFaceCall = 0;
 function applyFace(p = {}) {
@@ -1872,6 +1945,7 @@ async function wake(force) {
         arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; if ((params || {}).action === 'start') { needBump('boredom', -.35); needBump('hype', .1); } return arcade(params || {}); },
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
         web: params => webTool(params || {}),
+        move: params => { dbg.move = (dbg.move || 0) + 1; params = params || {}; needBump('boredom', -.05); return roamTo(params.to || params.where, params); },
         volume: params => {
           params = params || {}; let v = S.herVol == null ? 1 : S.herVol;
           const lv = Number(params.level);
@@ -1893,7 +1967,10 @@ async function wake(force) {
       onAudio: b => onAudioChunk(b),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); setTimeout(() => { if ((voice.herFaceAt || 0) < (voice.woke ? voice.woke.t : 0)) applyFace({ mood: (WAKE_STYLES[voice.woke && voice.woke.style] || WAKE_STYLES.groggy).awake }); }, 400); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
-      onDebug: ev => { const t = ev && (ev.type === 'tentative_user_transcript' || ev.tentative_user_transcription_event) && findText(ev); if (t) heardSoFar(t); },
+      onDebug: ev => {
+        if (ev && ev.type === 'tentative_agent_response' && ev.response) { earlyTags(ev.response); return; }
+        const t = ev && (ev.type === 'tentative_user_transcript' || ev.tentative_user_transcription_event) && findText(ev); if (t) heardSoFar(t);
+      },
       onDisconnect: d => {
         if (stale()) return;
         /* WebRTC that dies within seconds, before she's said anything, is almost always the network or the phone
@@ -1999,7 +2076,7 @@ function sendSessionNote(greet) {
   } else { try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {} }
 }
 function onVoiceEnd(d) {
-  keepAwake(false); cutin.holding = false; cutin.text = ''; cutin.since = 0;
+  keepAwake(false); roamHome(); cutin.holding = false; cutin.text = ''; cutin.since = 0;
   if (voice.connected) { S.lastSeen = Date.now(); saveSettings(); }
   const was = voice.connected;
   voice.connected = false; voice.connecting = false; voice.conv = null; voice.mode = 'listening';
@@ -2061,17 +2138,39 @@ const TAG_MOOD = { smug: 'smug', smirk: 'smug', smirks: 'smug', sarcastic: 'smug
   teasing: 'wink', playful: 'wink', wink: 'wink', flirty: 'smitten', smitten: 'smitten', dreamy: 'smitten', affectionate: 'smitten', soft: 'smitten',
   chill: 'chill', calm: 'chill', relaxed: 'chill', dizzy: 'dizzy', hungry: 'hungry' };
 let tagTimers = [];
+const tagQ = { list: [], key: '', firstKey: '', base: 0 };
+function parseTags(text) {
+  const tags = [], re = /\[([a-z][a-z ]{1,18})\]/gi; let m, plain = 0, last = 0;
+  while ((m = re.exec(text))) {
+    plain += text.slice(last, m.index).replace(/\s+/g, ' ').length; last = re.lastIndex;
+    const mood = TAG_MOOD[m[1].toLowerCase().trim()]; if (mood) tags.push({ mood, at: plain });
+  }
+  return tags;
+}
+function tagFace(mood) { voice.herFaceAt = performance.now(); applyFace({ mood }); }
+/* while her reply is still being written: the first feeling goes on her face right away */
+function earlyTags(text) {
+  const t = parseTags(text || ''); if (!t.length) return;
+  const key = String(text).slice(0, 24);
+  if (tagQ.firstKey !== key) { tagQ.firstKey = key; tagFace(t[0].mood); }
+}
 function faceFromTags(text) {
-  const tags = []; const re = /\[([a-z][a-z ]{1,18})\]/gi; let m, plain = 0, last = 0;
-  while ((m = re.exec(text))) { plain += m.index - last; last = re.lastIndex; const mood = TAG_MOOD[m[1].toLowerCase().trim()]; if (mood) tags.push({ mood, at: plain }); }
+  const tags = parseTags(text);
   if (!tags.length) return false;
   tagTimers.forEach(clearTimeout); tagTimers = [];
-  // roughly when she'll get to each tag: her audio starts a beat after the text, then about 14 letters a second
-  tags.forEach((t, i) => {
-    if (i && t.mood === tags[i - 1].mood) return;
-    tagTimers.push(setTimeout(() => { voice.herFaceAt = performance.now(); applyFace({ mood: t.mood }); }, i === 0 ? 0 : 250 + t.at / 14 * 1000));
-  });
+  const key = String(text).slice(0, 24);
+  if (tagQ.firstKey !== key) { tagQ.firstKey = key; tagFace(tags[0].mood); }
+  // the rest fire when her voice actually reaches that word (her audio carries letter timings)
+  // her first line in a stretch of speech starts at letter 0; a follow-up line (after a tool) picks up where the audio so far ends
+  const firstLine = tagQ.utter !== tl.utter || !tl.chunks.length;
+  tagQ.base = firstLine ? 0 : (tl.pushChars || 0); tagQ.utter = tl.chunks.length ? tl.utter : -1;
+  tagQ.list = tags.slice(1).filter((t, i) => t.mood !== tags[i].mood).map(t => ({ mood: t.mood, at: t.at + tagQ.base }));
+  // backup if no letter timings arrive: about 14 letters a second
+  tagQ.list.forEach(t => tagTimers.push(setTimeout(() => { if (tagQ.list.includes(t)) { tagQ.list.splice(tagQ.list.indexOf(t), 1); tagFace(t.mood); } }, 600 + (t.at - tagQ.base) / 14 * 1000 + 900)));
   return true;
+}
+function tagTick(spoken) {
+  while (tagQ.list.length && tagQ.list[0].at <= spoken + 1) tagFace(tagQ.list.shift().mood);
 }
 function guessMood(text) {
   const t = text.toLowerCase();
@@ -2094,7 +2193,7 @@ let simVoice = null;   // only for test videos: a fake voice level and mouth sha
    them, so at any moment it knows exactly how open her mouth should be and which letter she's on. */
 const tl = { chunks: [], end: 0, ref: .08, pendingAlign: null, rate: 0 };
 const RATES = [8000, 16000, 22050, 24000, 44100, 48000];
-function tlReset() { tl.chunks = []; tl.end = 0; tl.pendingAlign = null; }
+function tlReset() { tl.chunks = []; tl.end = 0; tl.pendingAlign = null; tl.pushChars = 0; tagQ.list = []; }
 function outLatency() {
   let l = 0;
   try { for (const c of (window.__lumiACs || [])) if (c.state === 'running') l = Math.max(l, (c.outputLatency || 0) + (c.baseLatency || 0)); } catch (e) {}
@@ -2117,8 +2216,10 @@ function onAudioChunk(b64) {
     env[f] = Math.sqrt(s2 / Math.max(1, cnt)) / 32768;
   }
   const now = performance.now(), dur = n / rate * 1000;
+  if (!tl.chunks.length && now > tl.end) { tl.pushChars = 0; tl.utter = (tl.utter || 0) + 1; }   // a new stretch of speech starts
   const start = Math.max(now + (voice.kind === 'webrtc' ? 0 : outLatency()), tl.end);
-  tl.chunks.push({ start, dur, env, al });
+  const charBase = tl.pushChars || 0; tl.pushChars = charBase + (al && al.chars ? al.chars.length : 0);
+  tl.chunks.push({ start, dur, env, al, charBase });
   tl.end = start + dur;
   if (tl.chunks.length > 80) tl.chunks.shift();
   dbg.chunks = (dbg.chunks || 0) + 1;
@@ -2127,14 +2228,15 @@ function tlSample(now) {
   while (tl.chunks.length && tl.chunks[0].start + tl.chunks[0].dur < now) tl.chunks.shift();
   const c = tl.chunks[0]; if (!c || now < c.start) return null;
   const off = now - c.start, rms = c.env[Math.min(c.env.length - 1, Math.floor(off / 20))] || 0;
-  tl.ref = Math.max(.04, tl.ref * .9993, rms);
-  const level = rms < .008 ? 0 : clamp(Math.pow(rms / (tl.ref * .7), .85), 0, 1);
-  let vis = '';
+  tl.ref = Math.max(.1, tl.ref * .9993, rms);
+  const level = rms < .025 || rms < tl.ref * .2 ? 0 : clamp(Math.pow(rms / (tl.ref * .7), .85), 0, 1);
+  let vis = '', spoken = -1;
   if (c.al && c.al.chars) {
     const S0 = c.al.char_start_times_ms || [], D0 = c.al.char_durations_ms || [];
-    for (let i = 0; i < c.al.chars.length; i++) if (off >= (S0[i] || 0) && off < (S0[i] || 0) + (D0[i] || 0)) { vis = charVis(c.al.chars[i]); break; }
+    for (let i = 0; i < c.al.chars.length; i++) if (off >= (S0[i] || 0) && off < (S0[i] || 0) + (D0[i] || 0)) { vis = charVis(c.al.chars[i]); spoken = c.charBase + i; break; }
+    if (spoken < 0) spoken = c.charBase + Math.round(c.al.chars.length * clamp(off / c.dur, 0, 1));
   }
-  return { level, vis };
+  return { level, vis, spoken };
 }
 function tlActive(now) { return tl.chunks.some(c => now >= c.start && now < c.start + c.dur); }
 
@@ -2172,6 +2274,7 @@ function sampleVoice() {
   if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; voice.deadN = 0; return; }
   const ts = tlSample(now + 35);
   if (ts) {
+    if (ts.spoken >= 0) tagTick(ts.spoken);
     voice.deadN = 0;
     voice.outLevel = lerp(voice.outLevel, ts.level, ts.level > voice.outLevel ? .55 : .3); dbg.peakOut = Math.max(dbg.peakOut, ts.level);
     if (ts.vis) { lip.vis = ts.vis; lip.lastAlign = now; }
@@ -2762,7 +2865,7 @@ function flushTouch() {
 /* ================= touch: poke, pat, rub, tickle, squish, drag, swipe ================= */
 const touch = { down: null, pokes: [], pats: [], longT: 0, motionAsked: false, lastShake: 0, shakeHits: [], pts: new Map(), pinch: null };
 function faceCoords(px, py) {
-  const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
+  const r = st.region, s = faceScale() * roam.z, cx = r.x + r.w / 2 + roam.x, cy = r.y + r.h / 2 + r.h * .02 + roam.y;
   return [(px - cx) / s - st.gx * 1.4, (py - cy) / s - st.gy - st.hop];
 }
 function zoneAt(px, py) {
@@ -2842,7 +2945,7 @@ function endTouch(e) {
   setTimeout(() => { if (!touch.down) st.touchGaze = null; }, 700);
   if (!d || d.done) return;
   const now = performance.now(), dur = now - d.t, dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
-  if (dist > 120 && dist / Math.max(dur, 1) > 1.1) { feel('swipe'); return; }
+  if (dist > 120 && dist / Math.max(dur, 1) > 1.1) { roamFling(e.clientX - d.x, e.clientY - d.y, dur); feel('swipe'); return; }
   if (dist > 14 || dur > 600) return;
   tap(d.zone, e.clientX, e.clientY, now);
 }
@@ -3760,7 +3863,7 @@ function frame(now) {
   sampleVoice();
   trackEyes(now);
   trackObjects(now);
-  autonomyTick(now); needsTick(now); dreamTick(now);
+  autonomyTick(now); needsTick(now); dreamTick(now); roamTick(now, dt);
   danceTick(now); gamesTick(now, dt);
   update(now, dt);
   renderFace(now);
@@ -3802,7 +3905,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

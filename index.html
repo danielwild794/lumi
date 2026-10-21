@@ -231,6 +231,19 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
+/* phones start audio paused until a tap. Keep every audio context running, including the ones her
+   voice library makes on its own, or her mouth gets no sound to move to */
+(() => {
+  const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+  const all = [];
+  try {
+    const Live = class extends AC { constructor(...a) { super(...a); all.push(this); if (this.state === 'suspended') this.resume().catch(() => {}); } };
+    window.AudioContext = Live; if (window.webkitAudioContext) window.webkitAudioContext = Live;
+  } catch (e) { return; }
+  const wakeAll = () => { for (let i = all.length - 1; i >= 0; i--) { const c = all[i]; if (c.state === 'closed') all.splice(i, 1); else if (c.state !== 'running') c.resume().catch(() => {}); } };
+  ['pointerdown', 'touchend', 'click', 'keydown'].forEach(ev => addEventListener(ev, wakeAll, { capture: true, passive: true }));
+  setInterval(wakeAll, 1500);
+})();
 (() => {
 'use strict';
 /* ================= setup ================= */
@@ -1613,8 +1626,9 @@ function loadScript(src) {
    if WebRTC dropped right after connecting, use the websocket for a few days */
 const TRANSPORT_KEY = 'lumi-live:transport';
 function preferredKind() {
-  try { const t = JSON.parse(localStorage.getItem(TRANSPORT_KEY) || 'null'); if (t && t.kind === 'websocket' && Date.now() - t.at < 3 * 864e5) return 'websocket'; } catch (e) {}
-  return 'webrtc';
+  /* the websocket sends the timing of every letter she says, so her mouth can shape each word; WebRTC doesn't */
+  try { const t = JSON.parse(localStorage.getItem(TRANSPORT_KEY) || 'null'); if (t && t.kind === 'webrtc' && t.pinned) return 'webrtc'; } catch (e) {}
+  return 'websocket';
 }
 function rememberKind(kind) { try { localStorage.setItem(TRANSPORT_KEY, JSON.stringify({ kind, at: Date.now() })); } catch (e) {} }
 async function wake(force) {
@@ -1650,7 +1664,7 @@ async function wake(force) {
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); }
       },
       onAudioAlignment: a => onAlign(a),
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDisconnect: d => {
         if (stale()) return;
@@ -1671,22 +1685,27 @@ async function wake(force) {
       onModeChange: ({ mode }) => {
         if (mode === 'speaking') voice.heard = true;
         if (voice.mode === 'speaking' && mode !== 'speaking') voice.lastSpoke = performance.now();
-        voice.mode = mode; st.speaking = mode === 'speaking'; if (!st.speaking) lipReset();
-        if (st.speaking) st.thinking = false;
-        setState(st.speaking ? 'TALKING' : (st.thinking ? 'THINKING' : 'LISTENING'));
+        voice.mode = mode; clearTimeout(voice.quietT);
+        if (mode === 'speaking') {
+          if (!st.speaking) { voice.talkT0 = performance.now(); }
+          st.speaking = true; st.thinking = false; setState('TALKING');
+        } else {
+          /* her audio comes in chunks; a short gap between them isn't the end of what she's saying */
+          voice.quietT = setTimeout(() => { if (voice.mode === 'speaking') return; st.speaking = false; lipReset(); setState(st.thinking ? 'THINKING' : 'LISTENING'); }, 320);
+        }
       },
       onMessage: msg => onVoiceMessage(msg),
-      onInterruption: () => { st.speaking = false; bump(.7); lipReset(); }
+      onInterruption: () => { clearTimeout(voice.quietT); st.speaking = false; bump(.7); lipReset(); }
     };
     let conv = null;
     voice.kind = want;
     try { conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: want }, opts)); }
     catch (e) {
       if (stale()) return;
-      if (want !== 'webrtc') throw e;
-      console.warn('webrtc failed, trying websocket', e); rememberKind('websocket');
-      voice.kind = 'websocket'; voice.startedAt = performance.now();
-      conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: 'websocket' }, opts));
+      const other = want === 'webrtc' ? 'websocket' : 'webrtc';
+      console.warn(want + ' failed, trying ' + other, e);
+      voice.kind = other; voice.startedAt = performance.now();
+      conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: other }, opts));
     }
     if (stale()) { try { await conv.endSession(); } catch (e) {} return; }
     voice.conv = conv; voice.connected = true; voice.connecting = false;
@@ -1723,7 +1742,8 @@ function ago(ms) {
   const h = Math.round(m / 60); if (h < 36) return h + (h === 1 ? ' hour ago' : ' hours ago');
   const dd = Math.round(h / 24); return dd + ' days ago';
 }
-function sendSessionNote() {
+const GREET_STYLE = ['sleepy', 'smug', 'dramatic', 'nosy', 'giddy', 'deadpan', 'mid-thought, like you were already busy with something', 'teasing', 'grumpy-cute', 'whispery and conspiratorial', 'chaotic', 'cozy'];
+function sendSessionNote(greet) {
   const c = voice.conv; if (!c) return;
   const when = new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
   const parts = [`[note] It's ${when} for them.`];
@@ -1736,7 +1756,11 @@ function sendSessionNote() {
   const book = readBook();
   try { parts.push(lifeNote(lifeOnWake())); } catch (e) {}
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
-  try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {}
+  if (greet && !voice.heard && roomQuiet(performance.now())) {
+    parts.push(`[wake] You just blinked awake on their screen. Say hi in your own words right now: one short line, no tools before your first words. Make it fresh, never a line you've used before, colored by your mood, the time, the weather and how long they were gone. Maybe ${pick(GREET_STYLE)} this time.`);
+    lastAutoTurn = performance.now();
+    try { c.sendUserMessage(parts.join(' ')); } catch (e) {}
+  } else { try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {} }
 }
 function onVoiceEnd(d) {
   keepAwake(false);
@@ -1775,7 +1799,8 @@ function onVoiceMessage(msg) {
   poke();
   const role = msg.role || (msg.source === 'ai' ? 'agent' : 'user');
   if (role === 'agent') {
-    caption(msg.message.replace(/\[[^\]]*\]/g, '').trim());
+    voice.sayText = msg.message.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim(); voice.sayT0 = performance.now();
+    caption(voice.sayText);
     if (performance.now() - lastFaceCall > 2600) guessMood(msg.message);
   } else {
     st.thinking = true; st.thinkingSince = performance.now(); setState('THINKING');
@@ -1800,6 +1825,20 @@ function guessMood(text) {
 /* voice levels each frame: your mic for the meter, her output for the mouth */
 const outBins = { lo: 0, hi: 0 };
 let simVoice = null;   // only for test videos: a fake voice level and mouth shape
+/* when no sound levels reach the page, her mouth follows the words she's saying at about her speaking pace */
+function textMouth(now) {
+  const t = voice.sayText || 'mm hmm yeah';
+  const t0 = Math.max(voice.sayT0 || 0, voice.talkT0 || 0);
+  const i = Math.floor(Math.max(0, now - t0) * .0145);
+  const ch = t[i % t.length] || ' ';
+  if (i !== voice.fakeI) {
+    voice.fakeI = i;
+    const v = charVis(ch);
+    voice.fakeLvl = /[.,!?…—-]/.test(ch) ? 0 : ch === ' ' ? .08 : 'aeiouy'.includes(ch.toLowerCase()) ? .62 + Math.random() * .35 : v === 'M' ? .04 : .3 + Math.random() * .25;
+    voice.outShape = v === 'rest' || v === 'M' ? 'C' : v;
+  }
+  voice.outLevel = lerp(voice.outLevel, voice.fakeLvl || 0, .45);
+}
 function sampleVoice() {
   if (simVoice) { voice.outLevel = simVoice.level || 0; voice.outShape = simVoice.shape || 'A'; return; }
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
@@ -1814,9 +1853,13 @@ function sampleVoice() {
     voice.whisperN = whisper ? (voice.whisperN || 0) + 1 : 0;
     if (voice.whisperN === 70 && cooled('whisper', 30000)) { react('curious', 2400, { screen: 'zoom_in' }); senseNote('[ears] they\'re whispering to you'); }
   }
-  if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; return; }
+  cueTick(now);
+  if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; voice.deadN = 0; return; }
   try {
     const f = c.getOutputByteFrequencyData();
+    let total = 0; if (f && f.length) for (let i = 0; i < f.length; i += 8) total += f[i];
+    voice.deadN = total === 0 ? (voice.deadN || 0) + 1 : 0;
+    if (voice.deadN > 12) { textMouth(now); return; }
     if (f && f.length) {
       let sum = 0, lo = 0, hi = 0; const n = f.length, cut = Math.floor(n * .22);
       for (let i = 0; i < n; i++) { sum += f[i]; if (i < cut) lo += f[i]; else hi += f[i]; }
@@ -1828,7 +1871,8 @@ function sampleVoice() {
       lipTick(now);
       outBins.lo = lo / cut / 255; outBins.hi = hi / (n - cut) / 255;
       const ratio = outBins.hi / (outBins.lo + .001);
-      voice.outShape = voice.outLevel > .7 ? 'A' : ratio > .9 ? (voice.outLevel > .4 ? 'E' : 'I') : ratio < .35 ? (voice.outLevel > .35 ? 'O' : 'U') : (voice.outLevel > .45 ? 'A' : 'C');
+      const shp = voice.outLevel > .7 ? 'A' : ratio > .9 ? (voice.outLevel > .4 ? 'E' : 'I') : ratio < .35 ? (voice.outLevel > .35 ? 'O' : 'U') : (voice.outLevel > .45 ? 'A' : 'C');
+      if (shp !== voice.outShape && now > (voice.shapeHold || 0)) { voice.outShape = shp; voice.shapeHold = now + 75; }
     } else {
       voice.outLevel = clamp((c.getOutputVolume() || 0) * 1.3, 0, 1); voice.outShape = 'A';
     }
@@ -1845,14 +1889,26 @@ function senseNote(text) { if (voice.connected && voice.conv) try { voice.conv.s
 function eyesNote(text) { senseNote('[eyes] ' + text); }
 /* moments worth her speaking up about on her own. Only when the room is quiet (she isn't talking,
    you aren't talking), and never more than one every 12 seconds; otherwise it's a silent note. */
-let lastAutoTurn = 0;
-function senseTurn(text, force) {
-  const now = performance.now();
-  const quiet = !st.speaking && !st.thinking && voice.inLevel < .1 && now - (voice.lastHeard || 0) > 1500;
-  if (voice.connected && voice.conv && quiet && (force || now - lastAutoTurn > 12000)) { lastAutoTurn = now; try { voice.conv.sendUserMessage(text); } catch (e) {} }
-  else senseNote(text);
+let lastAutoTurn = 0, pendingCue = null;
+function roomQuiet(now) {
+  return !st.speaking && voice.inLevel < .1 && now - (voice.lastHeard || 0) > 900 && !(st.thinking && now - (st.thinkingSince || 0) < 2200);
 }
-function eyesTurn(text) { senseTurn('[eyes] ' + text); }
+function senseTurn(text, force, gap) {
+  const now = performance.now();
+  if (!voice.connected || !voice.conv) return;
+  if (!force && now - lastAutoTurn < (gap || 12000)) { senseNote(text); return; }
+  if (roomQuiet(now)) { lastAutoTurn = now; pendingCue = null; try { voice.conv.sendUserMessage(text); } catch (e) {} return; }
+  /* she's mid-sentence or they're talking: hold it and bring it up the moment there's a gap */
+  if (pendingCue) senseNote(pendingCue.text);
+  pendingCue = { text, t: now };
+}
+function cueTick(now) {
+  if (!pendingCue) return;
+  if (!voice.connected || !voice.conv) { pendingCue = null; return; }
+  if (now - pendingCue.t > 6500) { senseNote(pendingCue.text); pendingCue = null; return; }
+  if (roomQuiet(now)) { const t = pendingCue.text; pendingCue = null; lastAutoTurn = now; try { voice.conv.sendUserMessage(t); } catch (e) {} }
+}
+function eyesTurn(text) { senseTurn('[eyes] ' + text, false, 4500); }
 
 async function startEyes() {
   if (cam.on || cam.loading) return;
@@ -2036,7 +2092,9 @@ function doLook() {
   react('curious', 1600);
   const e = cam.early && performance.now() - cam.early.t < 9000 ? cam.early : null;
   cam.early = null; dbg.early = (dbg.early || 0) + (e ? 1 : 0);
-  sendPicture('[eyes] This is what you see through their camera right now.', e && e.p);
+  const go = () => sendPicture('[eyes] This is what you see through their camera right now.', e && e.p);
+  if (!st.speaking) return go();
+  const t0 = performance.now(), iv = setInterval(() => { if (!st.speaking || performance.now() - t0 > 2200) { clearInterval(iv); go(); } }, 60);
 }
 
 /* she notices things on her own: an on-device detector spots everyday objects, no photo needed */
@@ -3172,6 +3230,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
+  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t),
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

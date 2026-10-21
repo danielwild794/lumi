@@ -1256,12 +1256,12 @@ function idleLife(now) {
 /* When it's been quiet for a while she gets a private moment to act on her own: say something, doodle,
    look around, tease you, or stay quiet. The gaps grow if you don't answer, and after three she dozes off. */
 const auto = { nextThought: 0, unanswered: 0 };
-function scheduleThought(now) { auto.nextThought = now + rnd(32000, 70000) * (1 + auto.unanswered * .7); }
+function scheduleThought(now) { auto.nextThought = now + rnd(12000, 24000) * (1 + auto.unanswered * .6); }
 function autonomyTick(now) {
   if (!voice.connected || !voice.conv) { auto.nextThought = 0; auto.unanswered = 0; return; }
   if (st.speaking || st.thinking || voice.inLevel > .08) return;
   const quietFor = now - Math.max(voice.lastHeard || 0, voice.lastSpoke || 0, voice.connectedAt || 0, lastAutoTurn);
-  if (quietFor < 8000) return;
+  if (quietFor < 6000) return;
   if (!auto.nextThought) { scheduleThought(now); return; }
   if (now < auto.nextThought) return;
   if (auto.unanswered >= 3) {

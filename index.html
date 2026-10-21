@@ -201,7 +201,7 @@ body.bare .toast{opacity:.9}
         </div>
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
-        <div class="row"><span class="lbl">MEDIA VOLUME, NOT CALL</span><button id="mediaVolBtn" type="button" aria-pressed="false">OFF</button></div>
+        <div class="row"><span class="lbl">MEDIA VOLUME, NOT CALL</span><button id="mediaVolBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
@@ -284,7 +284,7 @@ const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true, mediaVolume: false, herVol: 1 }, readSettings());
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true, mediaAudio: true, herVol: 1 }, readSettings());
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -2285,7 +2285,7 @@ const rawMic = { an: null, buf: null, src: null };
   const md = navigator.mediaDevices; if (!md || !md.getUserMedia) return;
   const orig = md.getUserMedia.bind(md);
   md.getUserMedia = async c => {
-    if (c && c.audio && S.mediaVolume) {
+    if (c && c.audio && S.mediaAudio) {
       const a = typeof c.audio === 'object' ? Object.assign({}, c.audio) : {};
       a.echoCancellation = false; a.noiseSuppression = false; a.autoGainControl = false; delete a.voiceIsolation;
       c = Object.assign({}, c, { audio: a });
@@ -2311,7 +2311,7 @@ function rawLevel() {
 }
 const gate = { on: false, barged: false, n: 0, k: .6 };
 function echoGate(now) {
-  if (!S.mediaVolume || !voice.conv || !voice.connected) { gate.on = false; return; }
+  if (!S.mediaAudio || !voice.conv || !voice.connected) { gate.on = false; return; }
   const talking = st.speaking || now - (voice.lastSpoke || 0) < 280;
   if (talking && !gate.barged) {
     gate.on = true;
@@ -3718,7 +3718,7 @@ function toggleRow(id, key, after) {
 }
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
 toggleRow('bareBtn', 'bare', applyBare);
-toggleRow('mediaVolBtn', 'mediaVolume', () => showToast('Takes effect next time she wakes up.'));
+toggleRow('mediaVolBtn', 'mediaAudio', () => showToast('Takes effect next time she wakes up.'));
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });

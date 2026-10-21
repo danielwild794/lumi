@@ -244,7 +244,7 @@ body.bare .toast{opacity:.9}
    voice library makes on its own, or her mouth gets no sound to move to */
 (() => {
   const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-  const all = [];
+  const all = []; window.__lumiACs = all;
   try {
     const Live = class extends AC { constructor(...a) { super(...a); all.push(this); if (this.state === 'suspended') this.resume().catch(() => {}); } };
     window.AudioContext = Live; if (window.webkitAudioContext) window.webkitAudioContext = Live;
@@ -678,7 +678,7 @@ function drawMouth(m, t) {
   { // her own invented mouth: stays on while she talks and stretches open with her voice
     const c = st.cust.mouth, now = performance.now(), v = custVis(c, now);
     if (v > 0) {
-      if (talking) drawMouthTalk(c, v, now, clamp(st.vh, 0, 8) * .85, clamp(st.vw / 4.6, .78, 1.25));
+      if (talking) drawMouthTalk(c, v, now, clamp(st.vh, 0, 6) * .8, clamp(st.vw / 4.6, .82, 1.18));
       else drawPart(c, v, now);
     }
     if (v > .995) { ctx.restore(); return; }
@@ -1271,7 +1271,7 @@ function renderFace(now) {
     ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
-    if (withFx) { ctx.fillStyle = COL; drawEffects(t, now); drawThinking(t); }
+    if (withFx) { ctx.fillStyle = COL; drawEffects(t, now); }
     ctx.restore();
   };
   if (g > 0) layer(g * s * DPR * 5.5, .5 * Math.min(1, g * 1.4), true);
@@ -1497,17 +1497,19 @@ function update(now, dt) {
   // her mouth: from her real voice when connected, else babble test
   if (st.speaking) {
     const a = voice.outLevel, useLetters = now - lip.lastAlign < 4000 && lip.vis;
-    const shape = useLetters ? lip.vis : voice.outShape;
-    st.mouthT = a < .06 || shape === 'M' ? 0 : clamp(a * 1.25, 0, 1);
-    st.visKey = a < .06 ? 'rest' : shape;
+    const want = a < .06 ? 'rest' : (useLetters ? lip.vis : voice.outShape);
+    // hold each mouth shape for a beat so letters don't make it flicker
+    if (want !== st.visKey && now >= (st.visHoldUntil || 0)) { st.visKey = want; st.visHoldUntil = now + (want === 'rest' ? 60 : 85); }
+    st.mouthT = a < .06 || st.visKey === 'M' || st.visKey === 'rest' ? 0 : clamp(a * 1.05, 0, .85);
   } else if (st.babble) {
-    if (now > st.nextSyl) { st.mouthT = Math.random() < .22 ? 0 : .25 + Math.random() * .75; st.nextSyl = now + 70 + Math.random() * 110; }
+    if (now > st.nextSyl) { st.mouthT = Math.random() < .22 ? 0 : .2 + Math.random() * .45; st.nextSyl = now + 70 + Math.random() * 110; }
     if (now > st.nextVis) { st.visKey = pick(BABBLE); st.nextVis = now + 70 + Math.random() * 90; }
   } else st.mouthT = 0;
-  st.mouth += (st.mouthT - st.mouth) * (1 - Math.exp(-dt * 30));
+  // opens quickly, closes a touch slower, and settles without bouncing past where it should be
+  st.mouth += (st.mouthT - st.mouth) * (1 - Math.exp(-dt * (st.mouthT > st.mouth ? 26 : 16)));
   const V = VIS[st.visKey] || VIS.rest, amp = clamp(st.mouth, 0, 1);
-  const tw = V.w * (.92 + .2 * amp), th = V.h * (.5 + 1.05 * amp), trr = V.r;
-  if (still) { st.vw = tw; st.vh = th; st.vr = trr; } else { spr(st, 'vw', tw, 500, 30, dt); spr(st, 'vh', th, 500, 30, dt); spr(st, 'vr', trr, 400, 28, dt); }
+  const tw = V.w * (.92 + .16 * amp), th = V.h * (.45 + .8 * amp), trr = V.r;
+  if (still) { st.vw = tw; st.vh = th; st.vr = trr; } else { spr(st, 'vw', tw, 600, 49, dt); spr(st, 'vh', th, 700, 53, dt); spr(st, 'vr', trr, 400, 40, dt); }
 
   // gaze: on your finger while you touch her screen, on you when she can see you, otherwise little glances around
   if (st.touchGaze) { st.tgx = st.touchGaze[0]; st.tgy = st.touchGaze[1]; st.nextLook = now + 900; }
@@ -1887,7 +1889,8 @@ async function wake(force) {
           startEyes(String(params.camera || 'front').toLowerCase());
         }
       },
-      onAudioAlignment: a => onAlign(a),
+      onAudioAlignment: a => { tl.pendingAlign = a; onAlign(a); },
+      onAudio: b => onAudioChunk(b),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); setTimeout(() => { if ((voice.herFaceAt || 0) < (voice.woke ? voice.woke.t : 0)) applyFace({ mood: (WAKE_STYLES[voice.woke && voice.woke.style] || WAKE_STYLES.groggy).awake }); }, 400); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDebug: ev => { const t = ev && (ev.type === 'tentative_user_transcript' || ev.tentative_user_transcription_event) && findText(ev); if (t) heardSoFar(t); },
@@ -1920,7 +1923,7 @@ async function wake(force) {
         }
       },
       onMessage: msg => onVoiceMessage(msg),
-      onInterruption: () => { clearTimeout(voice.quietT); st.speaking = false; bump(.7); lipReset(); }
+      onInterruption: () => { clearTimeout(voice.quietT); st.speaking = false; bump(.7); lipReset(); tlReset(); }
     };
     let conv = null;
     voice.kind = want;
@@ -2059,6 +2062,55 @@ function guessMood(text) {
 /* voice levels each frame: your mic for the meter, her output for the mouth */
 const outBins = { lo: 0, hi: 0 };
 let simVoice = null;   // only for test videos: a fake voice level and mouth shape
+/* her mouth, timed to the actual audio. Every chunk of her voice arrives as raw samples with the timing of each
+   letter. The page measures how loud each 20 ms slice is and lines the chunks up end to end the way the speaker plays
+   them, so at any moment it knows exactly how open her mouth should be and which letter she's on. */
+const tl = { chunks: [], end: 0, ref: .08, pendingAlign: null, rate: 0 };
+const RATES = [8000, 16000, 22050, 24000, 44100, 48000];
+function tlReset() { tl.chunks = []; tl.end = 0; tl.pendingAlign = null; }
+function outLatency() {
+  let l = 0;
+  try { for (const c of (window.__lumiACs || [])) if (c.state === 'running') l = Math.max(l, (c.outputLatency || 0) + (c.baseLatency || 0)); } catch (e) {}
+  return clamp(l * 1000, 40, 260);
+}
+function onAudioChunk(b64) {
+  let bin; try { bin = atob(b64); } catch (e) { return; }
+  const n = bin.length >> 1; if (!n) return;
+  const al = tl.pendingAlign; tl.pendingAlign = null;
+  // work out the sample rate from the letter timings when we can, otherwise assume her agent's 24 kHz
+  let rate = tl.rate || (voice.kind === 'webrtc' ? 48000 : 24000);
+  if (al && al.char_start_times_ms && al.char_start_times_ms.length) {
+    const k = al.char_start_times_ms.length - 1, ms = (al.char_start_times_ms[k] || 0) + ((al.char_durations_ms || [])[k] || 0);
+    if (ms > 150) { const guess = n / (ms / 1000); rate = RATES.reduce((a, r) => Math.abs(r - guess) < Math.abs(a - guess) ? r : a, 24000); tl.rate = rate; }
+  }
+  const fr = Math.max(1, Math.round(rate * .02)), env = new Float32Array(Math.ceil(n / fr));
+  for (let f = 0; f < env.length; f++) {
+    let s2 = 0, cnt = 0;
+    for (let i = f * fr, e = Math.min(n, (f + 1) * fr); i < e; i += 2) { let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8); if (v >= 32768) v -= 65536; s2 += v * v; cnt++; }
+    env[f] = Math.sqrt(s2 / Math.max(1, cnt)) / 32768;
+  }
+  const now = performance.now(), dur = n / rate * 1000;
+  const start = Math.max(now + (voice.kind === 'webrtc' ? 0 : outLatency()), tl.end);
+  tl.chunks.push({ start, dur, env, al });
+  tl.end = start + dur;
+  if (tl.chunks.length > 80) tl.chunks.shift();
+  dbg.chunks = (dbg.chunks || 0) + 1;
+}
+function tlSample(now) {
+  while (tl.chunks.length && tl.chunks[0].start + tl.chunks[0].dur < now) tl.chunks.shift();
+  const c = tl.chunks[0]; if (!c || now < c.start) return null;
+  const off = now - c.start, rms = c.env[Math.min(c.env.length - 1, Math.floor(off / 20))] || 0;
+  tl.ref = Math.max(.04, tl.ref * .9993, rms);
+  const level = rms < .008 ? 0 : clamp(Math.pow(rms / (tl.ref * .7), .85), 0, 1);
+  let vis = '';
+  if (c.al && c.al.chars) {
+    const S0 = c.al.char_start_times_ms || [], D0 = c.al.char_durations_ms || [];
+    for (let i = 0; i < c.al.chars.length; i++) if (off >= (S0[i] || 0) && off < (S0[i] || 0) + (D0[i] || 0)) { vis = charVis(c.al.chars[i]); break; }
+  }
+  return { level, vis };
+}
+function tlActive(now) { return tl.chunks.some(c => now >= c.start && now < c.start + c.dur); }
+
 /* when no sound levels reach the page, her mouth follows the words she's saying at about her speaking pace */
 function textMouth(now) {
   const t = voice.sayText || 'mm hmm yeah';
@@ -2089,7 +2141,19 @@ function sampleVoice() {
     if (voice.whisperN === 70 && cooled('whisper', 30000)) { react('curious', 2400, { screen: 'zoom_in' }); senseNote('[ears] they\'re whispering to you'); }
   }
   cueTick(now);
+  if (!st.speaking && tlActive(now)) { st.speaking = true; st.thinking = false; voice.talkT0 = now; setState('TALKING'); }
   if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; voice.deadN = 0; return; }
+  const ts = tlSample(now + 35);
+  if (ts) {
+    voice.deadN = 0;
+    voice.outLevel = lerp(voice.outLevel, ts.level, ts.level > voice.outLevel ? .55 : .3); dbg.peakOut = Math.max(dbg.peakOut, ts.level);
+    if (ts.vis) { lip.vis = ts.vis; lip.lastAlign = now; }
+    else { lip.vis = ''; lip.lastAlign = 0; const shp = ts.level > .7 ? 'A' : ts.level > .45 ? 'E' : ts.level > .2 ? 'C' : 'U'; if (now > (voice.shapeHold || 0)) { voice.outShape = shp; voice.shapeHold = now + 70; } }
+    voice.outEma = lerp(voice.outEma || 0, voice.outLevel, .06);
+    if (voice.outLevel > .72 && voice.outLevel > voice.outEma + .3 && now - (voice.lastPunch || 0) > 420) { voice.lastPunch = now; bump(.32); }
+    return;
+  }
+  if (tl.chunks.length) { voice.outLevel *= .6; return; }   // her next chunk hasn't started playing yet
   try {
     const f = c.getOutputByteFrequencyData();
     let total = 0; if (f && f.length) for (let i = 0; i < f.length; i += 8) total += f[i];
@@ -3710,7 +3774,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

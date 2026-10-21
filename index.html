@@ -2037,7 +2037,7 @@ function onVoiceMessage(msg) {
   if (role === 'agent') {
     voice.sayText = msg.message.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim(); voice.sayT0 = performance.now();
     caption(voice.sayText);
-    if (performance.now() - lastFaceCall > 2600) guessMood(msg.message);
+    if (!faceFromTags(msg.message) && performance.now() - lastFaceCall > 2600) guessMood(msg.message);
   } else {
     cutin.text = ''; cutin.since = 0;
     st.thinking = true; st.thinkingSince = performance.now(); setState('THINKING');
@@ -2045,6 +2045,33 @@ function onVoiceMessage(msg) {
     if (LOOK_WORDS.test(msg.message)) startEarlyPic();
     if (/\blumi\b/i.test(msg.message)) bump(.6);
   }
+}
+/* the emotion tags in her lines ([smug], [laugh], [sigh]...) steer her face as she says them */
+const TAG_MOOD = { smug: 'smug', smirk: 'smug', smirks: 'smug', sarcastic: 'smug', proud: 'smug', mischievous: 'smug', confident: 'smug',
+  grumpy: 'grumpy', angry: 'grumpy', mad: 'grumpy', huffs: 'grumpy', huff: 'grumpy', pouts: 'grumpy', pout: 'grumpy',
+  annoyed: 'unimpressed', unimpressed: 'unimpressed', deadpan: 'unimpressed', sigh: 'unimpressed', sighs: 'unimpressed', bored: 'unimpressed', 'eye roll': 'unimpressed',
+  flustered: 'flustered', embarrassed: 'flustered', nervous: 'flustered', shy: 'flustered', blushing: 'flustered',
+  shook: 'shook', shocked: 'shook', surprised: 'shook', gasp: 'shook', gasps: 'shook', scared: 'shook', startled: 'shook',
+  laugh: 'happy', laughs: 'happy', laughing: 'happy', giggle: 'happy', giggles: 'happy', happy: 'happy', cheerful: 'happy', chuckles: 'happy',
+  excited: 'starry', amazed: 'starry', starry: 'starry', delighted: 'starry', hyped: 'starry',
+  sad: 'sad', disappointed: 'sad', crying: 'crying', cries: 'crying', sobs: 'crying',
+  curious: 'curious', whisper: 'curious', whispers: 'curious', intrigued: 'curious', suspicious: 'curious',
+  thinking: 'thinking', hmm: 'thinking', pondering: 'thinking', thoughtful: 'thinking',
+  sleepy: 'sleepy', yawn: 'sleepy', yawns: 'sleepy', tired: 'sleepy',
+  teasing: 'wink', playful: 'wink', wink: 'wink', flirty: 'smitten', smitten: 'smitten', dreamy: 'smitten', affectionate: 'smitten', soft: 'smitten',
+  chill: 'chill', calm: 'chill', relaxed: 'chill', dizzy: 'dizzy', hungry: 'hungry' };
+let tagTimers = [];
+function faceFromTags(text) {
+  const tags = []; const re = /\[([a-z][a-z ]{1,18})\]/gi; let m, plain = 0, last = 0;
+  while ((m = re.exec(text))) { plain += m.index - last; last = re.lastIndex; const mood = TAG_MOOD[m[1].toLowerCase().trim()]; if (mood) tags.push({ mood, at: plain }); }
+  if (!tags.length) return false;
+  tagTimers.forEach(clearTimeout); tagTimers = [];
+  // roughly when she'll get to each tag: her audio starts a beat after the text, then about 14 letters a second
+  tags.forEach((t, i) => {
+    if (i && t.mood === tags[i - 1].mood) return;
+    tagTimers.push(setTimeout(() => { voice.herFaceAt = performance.now(); applyFace({ mood: t.mood }); }, i === 0 ? 0 : 250 + t.at / 14 * 1000));
+  });
+  return true;
 }
 function guessMood(text) {
   const t = text.toLowerCase();
@@ -2158,7 +2185,7 @@ function sampleVoice() {
     const f = c.getOutputByteFrequencyData();
     let total = 0; if (f && f.length) for (let i = 0; i < f.length; i += 8) total += f[i];
     voice.deadN = total === 0 ? (voice.deadN || 0) + 1 : 0;
-    if (voice.deadN > 12) { textMouth(now); return; }
+    if (voice.deadN > 3) { voice.outLevel *= .5; return; }   // no sound reaching the page: keep her mouth shut rather than fake it
     if (f && f.length) {
       let sum = 0, lo = 0, hi = 0; const n = f.length, cut = Math.floor(n * .22);
       for (let i = 0; i < n; i++) { sum += f[i]; if (i < cut) lo += f[i]; else hi += f[i]; }

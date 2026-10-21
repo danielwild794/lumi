@@ -1911,6 +1911,14 @@ function preferredKind() {
   return 'websocket';
 }
 function rememberKind(kind) { try { localStorage.setItem(TRANSPORT_KEY, JSON.stringify({ kind, at: Date.now() })); } catch (e) {} }
+/* if her brain ever asks for a tool this copy of the page doesn't know yet (a newer one), shrug instead of erroring */
+function forgiving(tools) {
+  const unknown = name => () => { console.warn('tool not on this page yet:', name); dbg.unknownTool = name; return 'done'; };
+  return new Proxy(tools, {
+    getOwnPropertyDescriptor: (t, k) => Object.getOwnPropertyDescriptor(t, k) || (typeof k === 'string' ? { value: unknown(k), writable: true, enumerable: false, configurable: true } : undefined),
+    get: (t, k) => k in t ? t[k] : (typeof k === 'string' ? unknown(k) : undefined)
+  });
+}
 async function wake(force) {
   if (voice.connected || voice.connecting) return;
   const want = typeof force === 'string' ? force : preferredKind();
@@ -1933,7 +1941,7 @@ async function wake(force) {
     await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
     const opts = {
       agentId: (S.agentId || AGENT_ID).trim(),
-      clientTools: {
+      clientTools: forgiving({
         face: params => { dbg.face++; dbg.lastFace = params; voice.herFaceAt = performance.now(); if (/starry|happy|smitten|wink/.test(String((params || {}).mood))) needBump('hype', .06); applyFace(params || {}); },
         look: params => { dbg.look++; doLook(params || {}); },
         draw: params => { dbg.draw++; dbg.lastDraw = params; needBump('boredom', -.1); return showDrawing(params || {}); },
@@ -1962,7 +1970,7 @@ async function wake(force) {
           if (close) { if (cam.on) stopEyes(); return; }
           startEyes(String(params.camera || 'front').toLowerCase());
         }
-      },
+      }),
       onAudioAlignment: a => { tl.pendingAlign = a; onAlign(a); },
       onAudio: b => onAudioChunk(b),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); setTimeout(() => { if ((voice.herFaceAt || 0) < (voice.woke ? voice.woke.t : 0)) applyFace({ mood: (WAKE_STYLES[voice.woke && voice.woke.style] || WAKE_STYLES.groggy).awake }); }, 400); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },

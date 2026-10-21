@@ -201,9 +201,7 @@ body.bare .toast{opacity:.9}
         </div>
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
-        <div class="row"><span class="lbl">MEDIA VOLUME, NOT CALL</span><button id="mediaVolBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">HER VOLUME</span><button id="herVolBtn" type="button">100%</button></div>
-        <div class="row"><span class="lbl">SHE LISTENS WITH</span><button id="micBtn" type="button">AUTO</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
@@ -286,7 +284,10 @@ const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true, mediaAudio: true, herVol: 1 }, readSettings());
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true, mediaAudio: false, herVol: 1 }, readSettings());
+// Android keeps any page with a live mic in call mode no matter what, so 'media mode' only stripped out the phone's
+// echo + noise cleanup and made her hard of hearing. Everyone goes back to the normal call-mode mic once.
+if (S.audioV !== 3) { S.mediaAudio = false; S.mic = 'auto'; S.audioV = 3; try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -1813,14 +1814,16 @@ function roamTo(place, opts = {}) {
     case 'peek_right': at(B.r.w / 2 + B.hw * .35, rnd(-.2, .2) * B.my); break;
     case 'peek_bottom': at(rnd(-.3, .3) * B.mx, B.r.h / 2 + B.hh * .3); break;
     case 'peek_top': at(rnd(-.3, .3) * B.mx, -B.r.h / 2 - B.hh * .3); break;
-    case 'close': at(0, 0); roam.tz = 1.45; break;
+    case 'close': at(0, 0); roam.tz = Math.max(1, Math.min(1.45, (B.r.w / 2) / B.hw * .97, (B.r.h / 2) / B.hh * .97)); break;
     case 'far': at(rnd(-.4, .4) * B.mx, rnd(-.3, .3) * B.my); roam.tz = .55; break;
     case 'hide': at((Math.random() < .5 ? -1 : 1) * (B.r.w / 2 + B.hw * 1.4), 0); break;
     case 'random': at(rnd(-1, 1) * B.mx, rnd(-1, 1) * B.my); break;
     case 'wander': roam.mode = 'wander'; roam.next = 0; break;
     case 'dvd': { roam.mode = 'dvd'; roam.tz = .7; const a = rnd(0, TAU), v = { slow: 90, normal: 170, fast: 300 }[opts.speed] || 170; roam.dvx = Math.cos(a) * v; roam.dvy = Math.sin(a) * v; break; }
   }
-  const secs = isFinite(+opts.seconds) && +opts.seconds > 0 ? clamp(+opts.seconds, 1, 120) : (place === 'wander' || place === 'dvd' ? 8 : place === 'hide' ? 4 : 0);
+  const off = ['peek_left', 'peek_right', 'peek_bottom', 'peek_top', 'hide'].includes(place);
+  let secs = isFinite(+opts.seconds) && +opts.seconds > 0 ? clamp(+opts.seconds, 1, 120) : (place === 'wander' || place === 'dvd' ? 8 : place === 'hide' ? 4 : off ? rnd(4, 7) : 0);
+  if (off) secs = Math.min(secs, 12);   // peeking or hiding is a moment, never where she stays
   roam.until = secs ? now + secs * 1000 : 0;
   roam.place = place; dbg.roam = place;
   return place;
@@ -1835,6 +1838,10 @@ function roamTick(now, dt) {
   if (game || arc || ttt || (drawing && drawing.where === 'full')) { if (roam.place !== 'center') roamHome(); }
   if (roam.until && now > roam.until) roamHome();
   const B = roamBox();
+  // safety net: if most of her ends up off the screen for long (a fling, a resize, an old target), she comes back
+  const outside = Math.abs(roam.x) > B.mx + B.hw * .45 || Math.abs(roam.y) > B.my + B.hh * .45;
+  roam.offFor = outside ? (roam.offFor || 0) + dt : 0;
+  if (roam.offFor > (roam.until ? 13 : 3)) { roam.offFor = 0; roamHome(); }
   if (roam.mode === 'wander' && now > roam.next) { roam.next = now + rnd(1200, 2600); roam.tx = rnd(-1, 1) * B.mx; roam.ty = rnd(-1, 1) * B.my; roam.k = 30; }
   if (roam.mode === 'dvd') {
     roam.x += roam.dvx * dt; roam.y += roam.dvy * dt;
@@ -1898,7 +1905,7 @@ function noticeYou() {
   if (standby.scene === 'asleep') { setTimeout(() => { if (asleepNow() && Math.random() < .5) sleepTalk(); }, rnd(800, 2000)); return; }
   setTimeout(() => {
     if (voice.connected) return;
-    if (roam.place !== 'center' && Math.random() < .7) roamHome();
+    if (roam.place !== 'center' && (['peek_left', 'peek_right', 'peek_bottom', 'peek_top', 'hide'].includes(roam.place) || Math.random() < .7)) roamHome();
     st.tgx = 0; st.tgy = 0; st.nextLook = performance.now() + 2200;
     react(pick(['shook', 'starry', 'curious', 'smug', 'flustered', 'happy']), 1400); bump(.6);
   }, rnd(700, 2200));
@@ -2085,7 +2092,7 @@ async function wake(force) {
       conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: other }, opts));
     }
     if (stale()) { try { await conv.endSession(); } catch (e) {} return; }
-    voice.conv = conv; voice.connected = true; voice.connecting = false;
+    voice.conv = conv; voice.connected = true; voice.connecting = false; roamHome();
     voice.micSent = false; applyMic();
     if (S.herVol < 1) try { conv.setVolume({ volume: S.herVol }); } catch (e) {}
     renderPanel();
@@ -2467,9 +2474,10 @@ function cutTick(now) {
   const done = (cutin.spoke && !st.speaking) || now - cutin.t0 > 9000 || (!cutin.spoke && now - cutin.t0 > 5000);
   if (done) { cutin.holding = false; cutin.text = ''; cutin.since = 0; applyMic(); }
 }
-/* her voice on media volume, not call volume. Android flips a page into "call mode" (call volume, which never goes
-   very low) whenever it uses the phone's built-in echo canceller. So on Android the mic opens without it, and the page
-   handles her echo itself: while she talks the mic pauses, unless you're clearly talking over her, then it lets you in. */
+/* Her mic. Normally untouched: Chrome on Android puts any page with a live mic into call mode (like every voice app),
+   with the phone's echo and noise cleanup, so you control her loudness with the volume buttons while she's awake
+   (call volume) and with her own volume, which goes much lower. The old experimental 'media mode' path below
+   (cleanup off, page-side echo gate) is off for everyone because Android stays in call mode anyway. */
 const rawMic = { an: null, buf: null, src: null };
 (() => {
   const md = navigator.mediaDevices; if (!md || !md.getUserMedia) return;
@@ -3932,8 +3940,7 @@ function toggleRow(id, key, after) {
 }
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
 toggleRow('bareBtn', 'bare', applyBare);
-toggleRow('mediaVolBtn', 'mediaAudio', () => showToast('Takes effect next time she wakes up.'));
-const VOL_STEPS = [1, .8, .6, .45, .3, .2];
+const VOL_STEPS = [1, .75, .55, .4, .28, .18, .1, .05];
 function renderVolBtn() { $('#herVolBtn').textContent = Math.round((S.herVol == null ? 1 : S.herVol) * 100) + '%'; }
 $('#herVolBtn').addEventListener('click', () => {
   const v = S.herVol == null ? 1 : S.herVol, i = VOL_STEPS.findIndex(x => x < v - .01);
@@ -3941,13 +3948,6 @@ $('#herVolBtn').addEventListener('click', () => {
   try { voice.conv && voice.conv.setVolume({ volume: S.herVol }); } catch (e) {}
 });
 renderVolBtn();
-async function renderMicBtn() { $('#micBtn').textContent = (!S.mic || S.mic === 'auto') ? 'AUTO' : S.mic.slice(0, 22).toUpperCase(); }
-$('#micBtn').addEventListener('click', async () => {
-  const names = ['auto'].concat((await micList()).filter(d => d.deviceId !== 'default' && d.deviceId !== 'communications').map(d => d.label));
-  const i = names.indexOf(S.mic || 'auto'); S.mic = names[(i + 1) % names.length]; saveSettings(); renderMicBtn();
-  showToast(names.length > 1 ? 'Takes effect next time she wakes up.' : 'Your browser only shows one mic right now.');
-});
-renderMicBtn();
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });
@@ -4032,7 +4032,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

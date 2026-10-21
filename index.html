@@ -1252,7 +1252,7 @@ function drawStrokes(t) {
   if (v > 0) { ctx.save(); ctx.translate(st.gx * 1.0, st.gy * .7); drawPart(ex, v, now); ctx.restore(); }
 }
 function faceScale() {
-  const r = st.region; return Math.max(.1, Math.min(r.w / 112, r.h / 80)) * .92;
+  const r = st.region; return Math.max(.1, S.bare ? Math.min(r.w / 90, r.h / 66) : Math.min(r.w / 112, r.h / 80) * .92);
 }
 function renderFace(now) {
   const t = now / 1000;
@@ -1384,7 +1384,7 @@ function composite(now) {
 /* ================= behaviour ================= */
 function regionTarget() {
   const W = innerWidth, H = innerHeight;
-  const top = 50, panelH = (panelEl.getBoundingClientRect().height || 90) + (S.cc && voice.connected ? 58 : 0);
+  const top = S.bare ? 0 : 50, panelH = S.bare ? 0 : (panelEl.getBoundingClientRect().height || 90) + (S.cc && voice.connected ? 58 : 0);
   let R = { x: 0, y: top, w: W, h: Math.max(60, H - top - panelH) };
   if (!osdWrap.hidden) {
     const b = osd.getBoundingClientRect();
@@ -3749,8 +3749,9 @@ function goFullscreen() {
   if (fs) try { const r = fs.call(el, { navigationUI: 'hide' }); if (r && r.catch) r.catch(() => {}); } catch (e) {}
 }
 const corner = { t: 0, at: null, ring: null };
+['pointerup', 'touchend', 'click', 'keydown'].forEach(ev => addEventListener(ev, goFullscreen, { capture: true, passive: true }));
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) corner.exitedAt = performance.now(); });
 addEventListener('pointerdown', e => {
-  goFullscreen();
   if (!S.bare || !osdWrap.hidden) return;
   if (e.clientX > innerWidth * .76 && e.clientY < innerHeight * .16) {
     corner.at = [e.clientX, e.clientY];
@@ -3767,7 +3768,7 @@ addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.ta
 applyBare();
 syncLab(); renderPanel();
 // she starts listening for you after your first touch (browsers need one before mic and sound work)
-addEventListener('pointerdown', () => setTimeout(startWakeWord, 300), { once: true });
+addEventListener('pointerup', () => setTimeout(startWakeWord, 300), { once: true });
 startWakeWord();
 if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}

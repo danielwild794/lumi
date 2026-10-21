@@ -117,6 +117,14 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
   .captions{font-size:21px}
 }
 @media (prefers-reduced-motion: reduce){ .osd{animation:none} }
+/* just her face: no buttons, no readout, no captions. Everything happens by voice and touch.
+   Hold the top-right corner for a second and a half to reach the menu. */
+body.bare .readout, body.bare .menu-chip, body.bare .panel, body.bare .captions{display:none!important}
+.peek{display:none!important}   /* she never shows you what her eyes see */
+body.bare .toast{opacity:.9}
+.corner-ring{position:fixed;z-index:7;width:46px;height:46px;margin:-23px 0 0 -23px;border:2px solid rgba(var(--phos-rgb),.7);border-radius:50%;
+  pointer-events:none;opacity:0;transform:scale(.4);transition:opacity .2s,transform 1.4s linear}
+.corner-ring.on{opacity:1;transform:scale(1)}
 </style>
 
 <canvas id="face" role="img" aria-label="Lumi's glowing screen face"></canvas>
@@ -192,11 +200,11 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
           <input type="text" id="agentId" spellcheck="false" autocomplete="off">
         </div>
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
-        <div class="row"><span class="lbl">CAMERA PEEK</span><button id="peekBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
-        <div class="row"><span class="lbl">"HEY LUMI" WAKES HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
-        <p class="note" id="wakeNote">While she's asleep, your browser listens for her name. In Chrome that listening goes through Google's speech service. Weather uses your rough location only to look up the forecast; she only gets told the weather.</p>
+        <p class="note" id="wakeNote">While she's asleep, your browser listens for you saying hi, wake up, or her name. In Chrome that listening goes through Google's speech service. Weather uses your rough location only to look up the forecast; she only gets told the weather.</p>
         <div class="sec">
           <span class="lbl">HER LIFE</span>
           <ul class="mem" id="lifeList"></ul>
@@ -274,7 +282,7 @@ function wpick(list) { const tot = list.reduce((s2, x) => s2 + Math.max(0, x[0])
 const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true }, readSettings());
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true, bare: true }, readSettings());
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -1643,8 +1651,10 @@ async function wake(force) {
     setTimeout(() => applyFace({ mood: pick(['curious', 'smug', 'wink', 'happy']) }), 700);
     return;
   }
-  applyFace({ mood: 'shook', screen: 'static' });
-  setTimeout(() => { if (!voice.connected) applyFace({ mood: 'curious' }); }, 900);
+  if (typeof force !== 'string') {
+    if (!voice.woke || performance.now() - voice.woke.t > 4000) voice.woke = { how: 'tap', phrase: '', style: wakeStyle('tap', ''), t: performance.now() };
+    playWake(voice.woke.style);
+  }
   voice.connecting = true; renderPanel(); setState('WAKING'); stopWakeWord();
   try {
     await loadScript(EL_URL);
@@ -1652,7 +1662,7 @@ async function wake(force) {
     const opts = {
       agentId: (S.agentId || AGENT_ID).trim(),
       clientTools: {
-        face: params => { dbg.face++; dbg.lastFace = params; applyFace(params || {}); },
+        face: params => { dbg.face++; dbg.lastFace = params; voice.herFaceAt = performance.now(); applyFace(params || {}); },
         look: params => { dbg.look++; doLook(params || {}); },
         draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
         remember: params => { dbg.remember++; addMemory(params && params.fact); },
@@ -1661,11 +1671,18 @@ async function wake(force) {
         sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); },
         dance: params => { dbg.dance = (dbg.dance || 0) + 1; return danceCall(params || {}); },
         arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; return arcade(params || {}); },
-        life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); }
+        life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
+        eyes: params => {
+          dbg.eyes = (dbg.eyes || 0) + 1; dbg.lastEyes = params; params = params || {};
+          const close = params.open === false || /close|off|shut|stop/i.test(String(params.action || ''));
+          if (close) { if (cam.on) stopEyes(); return; }
+          startEyes(String(params.camera || 'front').toLowerCase());
+        }
       },
       onAudioAlignment: a => onAlign(a),
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: wpick([[1, 'curious'], [1, 'smug'], [.8, 'wink'], [.7, 'chill'], [.6, 'starry'], [.6, 'happy']]), screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); setTimeout(() => { if ((voice.herFaceAt || 0) < (voice.woke ? voice.woke.t : 0)) applyFace({ mood: (WAKE_STYLES[voice.woke && voice.woke.style] || WAKE_STYLES.groggy).awake }); }, 400); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; Promise.race([fetchWeather(), new Promise(r => setTimeout(r, 1100))]).finally(() => sendSessionNote(true)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
+      onDebug: ev => { const t = ev && (ev.type === 'tentative_user_transcript' || ev.tentative_user_transcription_event) && findText(ev); if (t) heardSoFar(t); },
       onDisconnect: d => {
         if (stale()) return;
         /* WebRTC that dies within seconds, before she's said anything, is almost always the network or the phone
@@ -1742,7 +1759,7 @@ function ago(ms) {
   const h = Math.round(m / 60); if (h < 36) return h + (h === 1 ? ' hour ago' : ' hours ago');
   const dd = Math.round(h / 24); return dd + ' days ago';
 }
-const GREET_STYLE = ['sleepy', 'smug', 'dramatic', 'nosy', 'giddy', 'deadpan', 'mid-thought, like you were already busy with something', 'teasing', 'grumpy-cute', 'whispery and conspiratorial', 'chaotic', 'cozy'];
+const GREET_FLAVOR = ['', '', 'Maybe skip the hello and start mid-thought.', 'Maybe mention a dream you were having.', 'Maybe tease them for waking you.', 'Maybe ask what they want, like you were busy.', 'Maybe pretend you were awake the whole time.', 'Maybe bring up your obsession right away.'];
 function sendSessionNote(greet) {
   const c = voice.conv; if (!c) return;
   const when = new Date().toLocaleString([], { weekday: 'long', hour: 'numeric', minute: '2-digit' });
@@ -1757,13 +1774,15 @@ function sendSessionNote(greet) {
   try { parts.push(lifeNote(lifeOnWake())); } catch (e) {}
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
   if (greet && !voice.heard && roomQuiet(performance.now())) {
-    parts.push(`[wake] You just blinked awake on their screen. Say hi in your own words right now: one short line, no tools before your first words. Make it fresh, never a line you've used before, colored by your mood, the time, the weather and how long they were gone. Maybe ${pick(GREET_STYLE)} this time.`);
+    const W = voice.woke || { how: 'tap', phrase: '', style: 'groggy' };
+    const how = W.how === 'voice' ? `They woke you up by saying "${W.phrase}" out loud.` : W.how === 'poke' ? 'They poked you awake, three times.' : 'They tapped to wake you.';
+    parts.push(`[wake] You just blinked awake on their screen. ${how} You're waking up ${(WAKE_STYLES[W.style] || WAKE_STYLES.groggy).desc}. React to how they woke you and say hi in your own words right now: one short line, no tools before your first words. Make it fresh, never a line you've used before. ${pick(GREET_FLAVOR)}`.trim());
     lastAutoTurn = performance.now();
     try { c.sendUserMessage(parts.join(' ')); } catch (e) {}
   } else { try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {} }
 }
 function onVoiceEnd(d) {
-  keepAwake(false);
+  keepAwake(false); cutin.holding = false; cutin.text = ''; cutin.since = 0;
   if (voice.connected) { S.lastSeen = Date.now(); saveSettings(); }
   const was = voice.connected;
   voice.connected = false; voice.connecting = false; voice.conv = null; voice.mode = 'listening';
@@ -1803,6 +1822,7 @@ function onVoiceMessage(msg) {
     caption(voice.sayText);
     if (performance.now() - lastFaceCall > 2600) guessMood(msg.message);
   } else {
+    cutin.text = ''; cutin.since = 0;
     st.thinking = true; st.thinkingSince = performance.now(); setState('THINKING');
     voice.lastHeard = performance.now(); auto.unanswered = 0; auto.nextThought = 0;
     if (LOOK_WORDS.test(msg.message)) startEarlyPic();
@@ -1844,7 +1864,8 @@ function sampleVoice() {
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
   try { voice.inLevel = voice.muted ? 0 : clamp(c.getInputVolume() || 0, 0, 1); } catch (e) {}
   const now = performance.now();
-  if (voice.inLevel > .12) { poke(); voice.lastHeard = now; auto.unanswered = 0; }
+  if (voice.inLevel > .12) { poke(); voice.lastHeard = now; auto.unanswered = 0; if (!cutin.since && !st.speaking) cutin.since = now; }
+  else if (cutin.since && !cutin.text && now - (voice.lastHeard || 0) > 1500) cutin.since = 0;
   // how you sound: shouting makes her flinch, whispering makes her lean in
   if (!st.speaking && S.react) {
     voice.loudN = voice.inLevel > .85 ? (voice.loudN || 0) + 1 : 0;
@@ -1902,7 +1923,57 @@ function senseTurn(text, force, gap) {
   if (pendingCue) senseNote(pendingCue.text);
   pendingCue = { text, t: now };
 }
+/* cutting in: while you talk the page hears your words as you say them. Every so often, when something you say
+   gets to her (her name, a hot take, a big reveal) or you've been going a while, she jumps in. The mic holds still
+   for a moment so her line lands instead of getting talked over, like when a friend cuts you off. */
+const cutin = { text: '', since: 0, last: 0, lastTry: 0, holding: false, t0: 0, spoke: false, nudged: false };
+function findText(o, d = 0) {
+  if (!o || d > 3) return '';
+  if (typeof o.user_transcript === 'string') return o.user_transcript;
+  for (const k in o) if (o[k] && typeof o[k] === 'object') { const r = findText(o[k], d + 1); if (r) return r; }
+  return '';
+}
+const HOT = /\b(you'?re|you are|ur) (so |kinda |really |actually )?(ugly|dumb|annoying|boring|weird|mid|cringe|slow|broken|fake|lame)\b|\bi (hate|don'?t like|can'?t stand)\b|\b(guess what|no way|you won'?t believe|oh my god|omg|wait till|plot twist|confession|secret)\b|\b(pineapple|cereal|hot dog|cats? (are|is)|dogs? (are|is)|anime|crush|date|ex\b)/;
+function heardSoFar(text) {
+  const now = performance.now();
+  if (!cutin.since) cutin.since = now;
+  cutin.text = text;
+  if (!voice.connected || st.speaking || voice.muted || cutin.holding || S.cutin === false) return;
+  if (now - cutin.lastTry < 1400 || (cutin.last && now - cutin.last < 40000) || now - (voice.startedAt || 0) < 15000) return;
+  const t = text.toLowerCase(), words = t.split(/\s+/).filter(Boolean).length;
+  if (words < 5) return;
+  const talking = (now - cutin.since) / 1000;
+  let chance = 0;
+  if (/\blumi\b/.test(t) && words > 6) chance += .3;
+  if (HOT.test(t)) chance += .45;
+  if (talking > 9) chance += .2;
+  if (talking > 16) chance += .3;
+  const mood = (readLife().day_mood || '').toLowerCase();
+  if (/giddy|chaotic|hyper|feral|excited|smug|sassy|bratty/.test(mood)) chance += .1;
+  if (/sleepy|tired|soft|mellow/.test(mood)) chance -= .1;
+  cutin.lastTry = now;
+  if (chance > 0 && Math.random() < chance) cutIn(now);
+}
+function cutIn(now) {
+  const c = voice.conv; if (!c) return;
+  cutin.last = now; cutin.holding = true; cutin.t0 = now; cutin.spoke = false; cutin.nudged = false;
+  const so = cutin.text.trim().slice(-240);
+  senseNote(`[cut-in] They're still mid-sentence and you can't hold it in, so you're cutting them off right now. What they've said so far: "${so}". Butt in with a few words like a real friend would: "wait wait wait", finishing their sentence for them, objecting, a gasp, a tease. If their unfinished words then show up again as their own message, don't answer them a second time.`);
+  try { c.setMicMuted(true); } catch (e) {}
+  react(pick(['shook', 'curious', 'smug', 'unimpressed']), 900); bump(.5);
+}
+function cutTick(now) {
+  if (!cutin.holding) return;
+  if (st.speaking) cutin.spoke = true;
+  // she hasn't come in yet: give her a push so it lands while they're still talking
+  if (!cutin.spoke && !cutin.nudged && now - cutin.t0 > 1800 && voice.conv) {
+    cutin.nudged = true; try { voice.conv.sendUserMessage(`[cut-in] Jump in now. They were saying: "${cutin.text.trim().slice(-200)}"`); } catch (e) {}
+  }
+  const done = (cutin.spoke && !st.speaking) || now - cutin.t0 > 9000 || (!cutin.spoke && now - cutin.t0 > 5000);
+  if (done) { cutin.holding = false; cutin.text = ''; cutin.since = 0; if (voice.conv && !voice.muted) try { voice.conv.setMicMuted(false); } catch (e) {} }
+}
 function cueTick(now) {
+  cutTick(now);
   if (!pendingCue) return;
   if (!voice.connected || !voice.conv) { pendingCue = null; return; }
   if (now - pendingCue.t > 6500) { senseNote(pendingCue.text); pendingCue = null; return; }
@@ -1910,16 +1981,54 @@ function cueTick(now) {
 }
 function eyesTurn(text) { senseTurn('[eyes] ' + text, false, 4500); }
 
-async function startEyes() {
-  if (cam.on || cam.loading) return;
-  if (ENV.artifact) { showToast('Her eyes only work in the downloaded file, opened in Chrome on your computer.'); return; }
-  cam.loading = true; renderPanel(); showToast('Opening her eyes…');
+/* her eyes are your phone's cameras: front (you), back (whatever the phone points at), or both.
+   Some phones can't run two cameras at once; then she watches through the front and flips to the back for a quick peek when she looks. */
+cam.video2 = document.createElement('video'); cam.video2.playsInline = true; cam.video2.muted = true; cam.video2.setAttribute('playsinline', '');
+cam.which = 'front'; cam.both = '';
+const FACING = { front: 'user', back: 'environment' };
+async function openCam(side) {
+  const base = { width: { ideal: 640 }, height: { ideal: 480 } };
+  try { return await navigator.mediaDevices.getUserMedia({ video: Object.assign({ facingMode: { exact: FACING[side] } }, base), audio: false }); }
+  catch (e) { if (e && e.name === 'NotAllowedError') throw e; return await navigator.mediaDevices.getUserMedia({ video: Object.assign({ facingMode: FACING[side] }, base), audio: false }); }
+}
+function trackAlive(stream) { const t = stream && stream.getVideoTracks()[0]; return !!t && t.readyState === 'live' && !t.muted; }
+function stopStreams() {
+  [cam.stream, cam.stream2].forEach(x => x && x.getTracks().forEach(t => t.stop()));
+  cam.stream = cam.stream2 = null; cam.video2.srcObject = null;
+}
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function startEyes(which) {
+  which = ['front', 'back', 'both'].includes(which) ? which : 'front';
+  if (cam.loading) { cam.wantWhich = which; return; }
+  if (cam.on && cam.which === which) return;
+  cam.wantWhich = '';
+  if (ENV.artifact) { showToast('Her eyes only work on her site, not in this preview.'); return; }
+  const switching = cam.on;
+  cam.loading = true; renderPanel();
   try {
-    cam.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    if (switching) { stopStreams(); cam.present = false; st.trackGaze = null; cam.inView = {}; cam.objRun = {}; }
+    cam.stream = await openCam(which === 'back' ? 'back' : 'front');
     cam.video.srcObject = cam.stream; await cam.video.play();
-    $('#peek').hidden = !S.peek;
+    cam.which = which; cam.both = '';
+    if (which === 'both') {
+      try {
+        cam.stream2 = await openCam('back'); cam.video2.srcObject = cam.stream2; await cam.video2.play();
+        await wait(600);
+        if (trackAlive(cam.stream) && trackAlive(cam.stream2)) cam.both = 'live';
+        else throw new Error('one camera at a time');
+      } catch (e) {
+        if (cam.stream2) cam.stream2.getTracks().forEach(t => t.stop()); cam.stream2 = null; cam.video2.srcObject = null;
+        if (!trackAlive(cam.stream)) { cam.stream = await openCam('front'); cam.video.srcObject = cam.stream; await cam.video.play(); }
+        cam.both = 'flip';
+      }
+    }
     cam.on = true;
     applyFace({ mood: 'curious', screen: 'zoom_in' });
+    const note = which === 'back' ? 'Your eyes just opened on their back camera: you see whatever their phone is pointed at, not their face.'
+      : which === 'both' ? (cam.both === 'live' ? 'Both your eyes are open: their front camera (them) and their back camera (whatever the phone faces), at the same time.'
+        : 'They asked for both cameras, but their phone can only run one at a time. You watch through the front camera, and when you look you get a quick peek through both.')
+      : 'Your eyes just opened: their front camera is on and you can see them now.';
+    if (cam.lm || cam.od) { eyesNote(note); return; }
     const vision = await import(MP_BASE + '/vision_bundle.mjs');
     const files = await vision.FilesetResolver.forVisionTasks(MP_BASE + '/wasm');
     const make = async (Cls, opts) => {
@@ -1932,17 +2041,20 @@ async function startEyes() {
       cam.od = await make(vision.ObjectDetector, { baseOptions: { modelAssetPath: OBJ_MODEL }, runningMode: 'VIDEO', scoreThreshold: .5, maxResults: 6, categoryDenylist: OBJ_SKIP });
       cam.baselineUntil = performance.now() + 3500; cam.baselineDone = false; cam.objRun = {}; cam.objNoted = {}; cam.inView = {};
     } catch (e) { console.warn('object spotting unavailable', e); }
-    showToast('She can see you now.');
-    eyesNote('Your eyes just opened: their camera is on and you can see them now.');
+    eyesNote(note);
   } catch (e) {
     console.warn(e);
     stopEyes(true);
-    showToast(e && e.name === 'NotAllowedError' ? 'She needs the camera for her eyes. Allow it in the address bar, then press EYES again.' : 'Her eyes couldn\'t open: ' + ((e && e.message) || 'unknown error'));
-  } finally { cam.loading = false; renderPanel(); }
+    const denied = e && e.name === 'NotAllowedError';
+    showToast(denied ? 'She needs the camera for her eyes. Allow it for this site, then ask her again.' : 'Her eyes couldn\'t open: ' + ((e && e.message) || 'unknown error'));
+    eyesNote(denied ? 'You tried to open your eyes but they haven\'t allowed the camera for you yet.' : 'You tried to open your eyes but the camera wouldn\'t start.');
+  } finally {
+    cam.loading = false; renderPanel();
+    if (cam.wantWhich && cam.on && cam.wantWhich !== cam.which) { const w = cam.wantWhich; cam.wantWhich = ''; setTimeout(() => startEyes(w), 50); }
+  }
 }
 function stopEyes(silent) {
-  if (cam.stream) cam.stream.getTracks().forEach(t => t.stop());
-  cam.stream = null; cam.on = false; cam.present = false; st.trackGaze = null;
+  stopStreams(); cam.on = false; cam.present = false; st.trackGaze = null; cam.both = '';
   try { cam.lm && cam.lm.close(); cam.gr && cam.gr.close(); cam.od && cam.od.close(); } catch (e) {}
   cam.lm = cam.gr = cam.od = null; cam.inView = {}; cam.early = null; $('#peek').hidden = true;
   if (!silent) { applyFace({ mood: 'sleepy' }); setTimeout(() => applyFace({ mood: 'chill' }), 900); eyesNote('Your camera is off now, you can\'t see them anymore.'); }
@@ -1951,7 +2063,7 @@ function stopEyes(silent) {
 
 function blend(cats, name) { const c = cats.find(x => x.categoryName === name); return c ? c.score : 0; }
 function trackEyes(now) {
-  if (!cam.on || !cam.lm || cam.video.readyState < 2) return;
+  if (!cam.on || !cam.lm || cam.which === 'back' || cam.video.readyState < 2) return;
   if (now - cam.lastDet < 45) return;
   cam.lastDet = now;
   let res; try { res = cam.lm.detectForVideo(cam.video, now); } catch (e) { return; }
@@ -2053,14 +2165,35 @@ function trackEyes(now) {
 }
 
 /* photos are small and light so they upload fast on phone data, still plenty for her to see details */
-function snapshot() {
-  return new Promise((res, rej) => {
-    const v = cam.video; if (!cam.on || v.readyState < 2) return rej(new Error('camera off'));
-    const w = 512, h = Math.round(w * v.videoHeight / v.videoWidth) || 384;
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    c.getContext('2d').drawImage(v, 0, 0, w, h);
-    c.toBlob(b => b ? res(b) : rej(new Error('snapshot failed')), 'image/jpeg', .74);
-  });
+function frameOf(v, w) {
+  const h = Math.round(w * v.videoHeight / v.videoWidth) || Math.round(w * .75);
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(v, 0, 0, w, h); return c;
+}
+async function snapshot() {
+  const v = cam.video; if (!cam.on || v.readyState < 2) throw new Error('camera off');
+  let a = null, b = null;
+  if (cam.which === 'both') {
+    a = frameOf(v, 448);
+    if (cam.both === 'live' && cam.video2.readyState >= 2) b = frameOf(cam.video2, 448);
+    else if (cam.both === 'flip') {
+      // one camera at a time: hop to the back camera for a moment, then come back
+      try {
+        cam.stream.getTracks().forEach(t => t.stop());
+        const back = await openCam('back'); cam.video2.srcObject = back; await cam.video2.play(); await wait(350);
+        b = frameOf(cam.video2, 448); back.getTracks().forEach(t => t.stop()); cam.video2.srcObject = null;
+      } catch (e) { console.warn('back peek failed', e); }
+      try { cam.stream = await openCam('front'); cam.video.srcObject = cam.stream; await cam.video.play(); } catch (e) {}
+    }
+  } else a = frameOf(v, 512);
+  let out = a;
+  if (a && b) {
+    out = document.createElement('canvas'); out.width = a.width + b.width + 8; out.height = Math.max(a.height, b.height);
+    const g = out.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, out.width, out.height);
+    g.drawImage(a, 0, 0); g.drawImage(b, a.width + 8, 0);
+    g.font = 'bold 16px sans-serif'; g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 4;
+    [['FRONT CAMERA', 8], ['BACK CAMERA', a.width + 16]].forEach(([t, x]) => { g.strokeText(t, x, 22); g.fillText(t, x, 22); });
+  }
+  return await new Promise((res, rej) => out.toBlob(bl => bl ? res(bl) : rej(new Error('snapshot failed')), 'image/jpeg', .74));
 }
 function uploadNow() {
   const c = voice.conv; if (!c) return Promise.reject(new Error('not connected'));
@@ -2092,7 +2225,10 @@ function doLook() {
   react('curious', 1600);
   const e = cam.early && performance.now() - cam.early.t < 9000 ? cam.early : null;
   cam.early = null; dbg.early = (dbg.early || 0) + (e ? 1 : 0);
-  const go = () => sendPicture('[eyes] This is what you see through their camera right now.', e && e.p);
+  const what = cam.which === 'back' ? '[eyes] This is what you see through their back camera right now (what their phone is pointed at).'
+    : cam.which === 'both' ? '[eyes] This is what you see right now. If there are two views, the left is their front camera (them) and the right is their back camera (what the phone is pointed at).'
+    : '[eyes] This is what you see through their front camera right now.';
+  const go = () => sendPicture(what, cam.which === 'front' && e ? e.p : null);
   if (!st.speaking) return go();
   const t0 = performance.now(), iv = setInterval(() => { if (!st.speaking || performance.now() - t0 > 2200) { clearInterval(iv); go(); } }, 60);
 }
@@ -2104,10 +2240,11 @@ const OBJ_NAME = { 'cell phone': 'phone', 'sports ball': 'ball', 'teddy bear': '
 const CUTE = new Set(['cat', 'dog', 'bird', 'teddy bear', 'horse', 'sheep', 'cow', 'bear', 'elephant', 'zebra', 'giraffe']);
 const FOOD = new Set(['pizza', 'donut', 'cake', 'banana', 'apple', 'sandwich', 'hot dog', 'orange', 'broccoli', 'carrot']);
 function trackObjects(now) {
-  if (!cam.on || !cam.od || cam.video.readyState < 2 || now - cam.lastObj < 700) return;
+  const ov = cam.both === 'live' ? cam.video2 : cam.video;   // with both eyes open she spots things through the back camera
+  if (!cam.on || !cam.od || ov.readyState < 2 || now - cam.lastObj < 700) return;
   cam.lastObj = now;
-  let res; try { res = cam.od.detectForVideo(cam.video, now); } catch (e) { return; }
-  const vw = cam.video.videoWidth || 640, vh = cam.video.videoHeight || 480;
+  let res; try { res = cam.od.detectForVideo(ov, now); } catch (e) { return; }
+  const vw = ov.videoWidth || 640, vh = ov.videoHeight || 480;
   const seen = {}; let people = 0;
   for (const d of (res && res.detections) || []) {
     const c = d.categories && d.categories[0]; if (!c) continue;
@@ -2293,6 +2430,7 @@ const pdist = () => { const v = [...touch.pts.values()]; return Math.hypot(v[0].
 cv.addEventListener('pointerdown', e => {
   askMotion(); sfx.unlock(); poke();
   const now = performance.now();
+  if (!(e.clientX > innerWidth * .76 && e.clientY < innerHeight * .16)) sleepPoke(now);   // the menu corner isn't a poke
   if (gameTap(e.clientX, e.clientY, now)) return;
   try { cv.setPointerCapture(e.pointerId); } catch (er) {}
   touch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -3074,12 +3212,60 @@ function startWakeWord() {
   r.onresult = e => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = (e.results[i][0] && e.results[i][0].transcript || '').toLowerCase();
-      if (/\b(lu+m(i|ie|y|ee)|loo ?m(i|e|y|ee)|lou ?me|lumie)\b/.test(t)) { stopWakeWord(); react('shook', 600, { screen: 'static' }); setTimeout(wake, 300); return; }
+      const fin = e.results[i].isFinal, words = t.trim().split(/\s+/).filter(Boolean).length;
+      const named = NAME_RE.test(t), greet = WAKE_RE.exec(t.trim());
+      if (named || (greet && fin && words <= 6)) {
+        const phrase = (named ? (t.match(/[^.?!]*\b(lu+m(i|ie|y|ee)|loo ?m(i|e|y|ee)|lou ?me|lumie)\b[^.?!]*/) || [t])[0] : t).trim().slice(0, 60);
+        stopWakeWord(); wakeBy('voice', phrase); return;
+      }
     }
   };
   r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { ww.want = false; $('#wakeNote').textContent = 'Allow the microphone for this site so she can hear her name while she sleeps.'; } };
   r.onend = () => { ww.rec = null; if (ww.want && S.wake && !voice.connected && !voice.connecting) setTimeout(startWakeWord, 500); };
   try { r.start(); ww.rec = r; if (!voice.connected) setState('SAY "HEY LUMI"'); } catch (e) { ww.rec = null; }
+}
+const NAME_RE = /\b(lu+m(i|ie|y|ee)|loo ?m(i|e|y|ee)|lou ?me|lumie)\b/;
+const WAKE_RE = /^(hey+|hi+|hello+|hiya|heya|yo+|oi+|psst+|wake up|get up|rise and shine|good morning|morning|wakey|you up|are you up|you awake|are you awake|are you there|you there|knock knock|anybody home|anyone home|sleepy ?head|lazy ?bones|helo+|hay)\b/;
+/* how she wakes depends on how you woke her, with some randomness so it's never the same twice */
+const WAKE_STYLES = {
+  groggy: { desc: 'groggy and slow, still half asleep', seq: [['sleepy', 0], ['sleepy', 700, 'zoom_in'], ['chill', 1900]], awake: 'chill' },
+  startled: { desc: 'startled awake, jumpy', seq: [['shook', 0, 'static'], ['curious', 850]], awake: 'curious' },
+  grumpy: { desc: 'grumpy about being woken up', seq: [['sleepy', 0], ['grumpy', 650], ['unimpressed', 1900]], awake: 'unimpressed' },
+  stretchy: { desc: 'stretching and yawning, slowly booting up', seq: [['sleepy', 0, 'zoom_in'], ['dizzy', 900], ['chill', 1900]], awake: 'chill' },
+  bright: { desc: 'instantly bright and happy to see them', seq: [['curious', 0, 'flash'], ['starry', 600]], awake: 'starry' },
+  smug: { desc: 'acting like you were never asleep at all', seq: [['sleepy', 0], ['smug', 500]], awake: 'smug' },
+  flustered: { desc: 'caught napping and a little embarrassed', seq: [['shook', 0], ['flustered', 700]], awake: 'flustered' }
+};
+function wakeStyle(how, phrase) {
+  const p = (phrase || '').toLowerCase();
+  if (how === 'poke') return pick(['grumpy', 'startled', 'grumpy', 'flustered']);
+  if (/wake|get up|rise|morning|wakey|sleepy|lazy/.test(p)) return pick(['groggy', 'grumpy', 'stretchy', 'smug']);
+  if (/you up|awake|there|anybody|anyone|knock/.test(p)) return pick(['groggy', 'bright', 'smug', 'flustered']);
+  if (/psst/.test(p)) return pick(['startled', 'groggy']);
+  if (NAME_RE.test(p)) return pick(['startled', 'bright', 'smug', 'groggy', 'flustered']);
+  return pick(Object.keys(WAKE_STYLES));
+}
+function playWake(style) {
+  const W = WAKE_STYLES[style] || WAKE_STYLES.groggy, t0 = performance.now();
+  W.seq.forEach(([mood, at, screen]) => setTimeout(() => {
+    if ((voice.herFaceAt || 0) > t0) return;   // she already picked her own face
+    applyFace(screen ? { mood, screen } : { mood });
+  }, at));
+}
+function wakeBy(how, phrase) {
+  if (voice.connected || voice.connecting) return;
+  voice.woke = { how, phrase: phrase || '', style: wakeStyle(how, phrase), t: performance.now() };
+  wake();
+}
+/* asleep: poke her a few times and she'll wake up (probably annoyed) */
+const nap = { pokes: [] };
+function sleepPoke(now) {
+  if (ENV.artifact || voice.connected || voice.connecting) return;
+  nap.pokes = nap.pokes.filter(t => now - t < 4000); nap.pokes.push(now);
+  const n = nap.pokes.length;
+  if (n === 1) react('sleepy', 900);
+  else if (n === 2) react(pick(['grumpy', 'unimpressed']), 1100);
+  else { nap.pokes = []; wakeBy('poke', ''); }
 }
 function stopWakeWord() { ww.want = false; if (ww.rec) { try { ww.rec.abort(); } catch (e) {} ww.rec = null; } }
 
@@ -3126,8 +3312,8 @@ function renderPanel() {
   const mk = $('#micKey'); mk.disabled = !voice.connected; mk.setAttribute('aria-pressed', String(voice.muted));
   $('#micLb').textContent = voice.muted ? 'MUTED' : 'MIC'; $('#micSlash').hidden = !voice.muted;
 }
-$('#powerKey').addEventListener('click', () => { voice.connected ? sleep() : wake(); });
-$('#eyesKey').addEventListener('click', () => { cam.on ? stopEyes() : startEyes(); });
+$('#powerKey').addEventListener('click', () => { voice.connected ? sleep() : wakeBy('tap', ''); });
+$('#eyesKey').addEventListener('click', () => { cam.on ? stopEyes() : startEyes('front'); });
 $('#showKey').addEventListener('click', () => { if (voice.connected && cam.on) { react('curious', 1800); sendPicture('Look at this.'); } });
 $('#micKey').addEventListener('click', () => {
   voice.muted = !voice.muted;
@@ -3172,7 +3358,7 @@ function toggleRow(id, key, after) {
   b.addEventListener('click', () => { S[key] = !S[key]; saveSettings(); r(); after && after(); }); r();
 }
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
-toggleRow('peekBtn', 'peek', () => { $('#peek').hidden = !(S.peek && cam.on); });
+toggleRow('bareBtn', 'bare', applyBare);
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });
@@ -3222,15 +3408,40 @@ function frame(now) {
   renderVU();
   requestAnimationFrame(frame);
 }
+/* just her face: no chrome, fullscreen on your first touch, hold the top-right corner for the menu */
+function applyBare() { document.body.classList.toggle('bare', !!S.bare); }
+function goFullscreen() {
+  if (!S.bare || ENV.artifact || document.fullscreenElement) return;
+  const el = document.documentElement, fs = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (fs) try { const r = fs.call(el, { navigationUI: 'hide' }); if (r && r.catch) r.catch(() => {}); } catch (e) {}
+}
+const corner = { t: 0, at: null, ring: null };
+addEventListener('pointerdown', e => {
+  goFullscreen();
+  if (!S.bare || !osdWrap.hidden) return;
+  if (e.clientX > innerWidth * .76 && e.clientY < innerHeight * .16) {
+    corner.at = [e.clientX, e.clientY];
+    if (!corner.ring) { corner.ring = document.createElement('div'); corner.ring.className = 'corner-ring'; document.body.appendChild(corner.ring); }
+    corner.ring.style.left = e.clientX + 'px'; corner.ring.style.top = e.clientY + 'px';
+    requestAnimationFrame(() => corner.ring && corner.ring.classList.add('on'));
+    clearTimeout(corner.t); corner.t = setTimeout(() => { cornerOff(); openOSD(); }, 1500);
+  }
+}, true);
+function cornerOff() { clearTimeout(corner.t); corner.at = null; if (corner.ring) corner.ring.classList.remove('on'); }
+addEventListener('pointermove', e => { if (corner.at && Math.hypot(e.clientX - corner.at[0], e.clientY - corner.at[1]) > 20) cornerOff(); }, true);
+addEventListener('pointerup', cornerOff, true); addEventListener('pointercancel', cornerOff, true);
+addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.target.closest('input,textarea')) { osdWrap.hidden ? openOSD() : closeOSD(); } });
+applyBare();
 syncLab(); renderPanel();
-// she starts listening for her name after your first tap (browsers need one before mic and sound work)
+// she starts listening for you after your first touch (browsers need one before mic and sound work)
 addEventListener('pointerdown', () => setTimeout(startWakeWord, 300), { once: true });
+startWakeWord();
 if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t),
+  talk: () => ({ speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin),
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

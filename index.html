@@ -368,8 +368,8 @@ const MOODS = [
   { id: 'laughing',    key: null, name: 'LAUGHING', eye: 'arc',                                                  mouth: 'open',  blush: .65, fx: 'sparkles', wander: .2,  head: .07,   brows: { L: [-3, .4, 2], R: [-3, .4, 2] } },
   { id: 'angry',       key: null, name: 'ANGRY',  eye: 'almond', open: .9,   lid: .44, tilt: -.3,  pupil: .78,  mouth: 'zigzag', blush: .2, fx: 'anger',    wander: .1,  head: -.06,  brows: { L: [2, -3.2, 0], R: [2, -3.2, 0] } },
   { id: 'determined',  key: null, name: 'DETERMINED', eye: 'almond', open: 1, lid: .3,  tilt: -.16, pupil: .92,  mouth: 'flat',  blush: 0,   fx: null,       wander: .1,  head: -.03,  brows: { L: [.6, -1.6, .6], R: [.6, -1.6, .6] } },
-  { id: 'mischievous', key: null, name: 'MISCHIEVOUS', eye: 'almond', open: 1, lid: .34, tilt: -.1, pupil: .9,  mouth: 'teeth', blush: .35, fx: 'twinkle',  wander: .25, head: .06,   gaze: [-.6, .1], brows: { L: [-3.6, -1, 1.8], R: [.8, -1.6, .4] } },
-  { id: 'nervous',     key: null, name: 'NERVOUS', eye: 'almond', open: 1.22, lid: 0,   tilt: .08,  pupil: .55,  mouth: 'teeth', blush: .3,  fx: 'sweat',    wander: .5,  head: -.03,  brows: { L: [-2.4, 2.6, .4], R: [-2.4, 2.6, .4] } },
+  { id: 'mischievous', key: null, name: 'MISCHIEVOUS', eye: 'almond', open: 1, lid: .34, tilt: -.1, pupil: .9,  mouth: 'smirk', blush: .35, fx: 'twinkle',  wander: .25, head: .06,   gaze: [-.6, .1], brows: { L: [-3.6, -1, 1.8], R: [.8, -1.6, .4] } },
+  { id: 'nervous',     key: null, name: 'NERVOUS', eye: 'almond', open: 1.22, lid: 0,   tilt: .08,  pupil: .55,  mouth: 'wavy',  blush: .3,  fx: 'sweat',    wander: .5,  head: -.03,  brows: { L: [-2.4, 2.6, .4], R: [-2.4, 2.6, .4] } },
   { id: 'awe',         key: null, name: 'AWE',    eye: 'almond', open: 1.36, lid: 0,   tilt: .02,  pupil: 1.28, mouth: 'o',     blush: .3,  fx: 'sparkles', wander: .1,  head: .02,   gaze: [0, -.3], brows: { L: [-4.6, .8, 2.2], R: [-4.6, .8, 2.2] } },
   { id: 'ko',          key: null, name: 'K.O.',   eye: 'x',                                                      mouth: 'wavy',  blush: 0,   fx: null,       wander: 0,   head: .1,    brows: { L: [-1, 1.5, .4], R: [-1.6, 1.2, .4] } },
   { id: 'proud',       key: null, name: 'PROUD',  eye: 'closed',                                                 mouth: 'grin',  blush: .4,  fx: 'sparkles', wander: 0,   head: -.09,  brows: { L: [-3, -.6, 2], R: [-3, -.6, 2] } },
@@ -379,7 +379,7 @@ const MOODS = [
   { id: 'blank',       key: null, name: 'BLANK',  eye: 'dot',                                                    mouth: 'flat',  blush: 0,   fx: null,       wander: 0,   head: 0,     brows: { L: [-.4, 0, .2], R: [-.4, 0, .2] } },
   { id: 'kissy',       key: null, name: 'KISSY',  eye: 'closed',                                                 mouth: 'kiss',  blush: 1,   fx: 'hearts',   wander: 0,   head: .07,   brows: { L: [-2, 1, 1.2], R: [-2, 1, 1.2] } },
   { id: 'serene',      key: null, name: 'SERENE', eye: 'closed',                                                 mouth: 'smile', blush: .3,  fx: null,       wander: 0,   head: .04,   brows: { L: [-1, .3, 1.2], R: [-1, .3, 1.2] } },
-  { id: 'cringe',      key: null, name: 'CRINGE', eye: 'squeeze',                                                mouth: 'teeth', blush: .1,  fx: 'sweat',    wander: 0,   head: -.05,  brows: { L: [-.4, 2.4, .2], R: [-.4, 2.4, .2] } }
+  { id: 'cringe',      key: null, name: 'CRINGE', eye: 'squeeze',                                                mouth: 'zigzag', blush: .1, fx: 'sweat',    wander: 0,   head: -.05,  brows: { L: [-.4, 2.4, .2], R: [-.4, 2.4, .2] } }
 ];
 const MOOD_BY = Object.fromEntries(MOODS.map(m => [m.id, m]));
 const PERSIST_FX = new Set(['zzz', 'tears']);
@@ -427,14 +427,14 @@ const VARIANTS = {
   smug:    { mouth: [[4, 'smirk'], [.8, 'blep'], [.6, 'hmm']] },
   curious: { mouth: [[3, 'hmm'], [1.5, 'o'], [1, 'smirk']] },
   hungry:  { mouth: [[3, 'open'], [1.2, 'blep'], [1, 'o']] },
-  laughing: { mouth: [[3, 'open'], [2, 'grin'], [1, 'teeth']], eye: [[3, 'arc'], [1, 'squeeze']] },
-  angry:   { mouth: [[3, 'zigzag'], [2, 'teeth'], [1, 'frown']] },
-  nervous: { mouth: [[3, 'teeth'], [2, 'wavy'], [1, 'hmm']] },
-  mischievous: { mouth: [[3, 'teeth'], [2, 'smirk'], [1, 'cat']] },
+  laughing: { mouth: [[3, 'open'], [2, 'grin'], [1, 'smile']], eye: [[3, 'arc'], [1, 'squeeze']] },
+  angry:   { mouth: [[3, 'zigzag'], [2, 'frown'], [1, 'pout']] },
+  nervous: { mouth: [[3, 'wavy'], [1.5, 'hmm'], [1, 'o']] },
+  mischievous: { mouth: [[3, 'smirk'], [1.5, 'cat'], [1, 'grin']] },
   proud:   { mouth: [[2, 'grin'], [2, 'smirk'], [1, 'smile']], eye: [[2, 'closed'], [1, 'arc']] },
   determined: { mouth: [[3, 'flat'], [1.5, 'smirk'], [1, 'pout']] },
   awe:     { mouth: [[3, 'o'], [1, 'open']] },
-  cringe:  { mouth: [[3, 'teeth'], [1, 'zigzag'], [1, 'wavy']] },
+  cringe:  { mouth: [[3, 'zigzag'], [1.5, 'wavy'], [1, 'frown']] },
   serene:  { mouth: [[3, 'smile'], [1, 'cat']] },
   confused: { mouth: [[2, 'wavy'], [2, 'hmm'], [1, 'o']] }
 };
@@ -795,17 +795,10 @@ function drawMouth(m, t) {
     case 'wavy': { const pts = []; for (let i = 0; i <= 28; i++) pts.push([-7 + i * .5, 1 + Math.sin(i * .95 + t * 6) * .9]); brush(pts, taperMid(.55, .04)); break; }
     case 'open':
       grin(5.8, -1, 7.4);
-      for (const fx of [-1, 1]) { ctx.beginPath(); ctx.moveTo(fx * 3.7, -1); ctx.lineTo(fx * 2.7, -1); ctx.lineTo(fx * 3.1, 1.2); ctx.closePath(); ctx.fill(); }
       break;
     case 'blep': {
       brush(qpts(-5.4, -.6, 0, 2.6, 5.4, -.6, 20), taperMid(.6, .04));
       brush(qpts(.2, 1.05, 1.5, 5.4, 3.1, .55, 14), taperMid(.5, .06));
-      break;
-    }
-    case 'teeth': { // a wide toothy grin: the outline, where her teeth meet, and a few gaps
-      grin(5.8, -.8, 4.6);
-      brush(qpts(-5.1, 1.2, 0, 2, 5.1, 1.2, 16), taperMid(.4, .05));
-      for (const x of [-2.7, 0, 2.7]) brush([[x, -.45], [x, -.8 + 3.45 * (1 - (x / 5.8) * (x / 5.8)) - .35]], taperMid(.36, .08));
       break;
     }
     case 'zigzag': { // gritted and jagged, trembling a little
@@ -2208,12 +2201,12 @@ function roamIdle() {
 const standby = { scene: '', since: 0, dozeAt: 0, activity: '', hiddenAt: 0 };
 const SCENES = {
   asleep: { act: 'asleep', start: () => applyFace({ mood: 'sleepy' }) },
-  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug']) }) },
+  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug', 'serene', 'mischievous']) }) },
   doodle: { act: 'doodling something for yourself', start: () => { applyFace({ mood: 'thinking' }); standbyDoodle(); setTimeout(standbyDoodle, 1800); } },
-  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
+  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill', 'serene', 'awe']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
   peek: { act: 'peeking in from the edge of your screen', start: () => { applyFace({ mood: 'curious' }); roamTo(pick(['peek_left', 'peek_right', 'peek_bottom']), { speed: 'normal' }); } },
-  wander: { act: 'wandering around your screen', start: () => { applyFace({ mood: pick(['chill', 'smug']) }); roamTo('wander', { seconds: 7 }); } },
-  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: 'chill' }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
+  wander: { act: 'wandering around your screen', start: () => { applyFace({ mood: pick(['chill', 'smug', 'determined', 'mischievous']) }); roamTo('wander', { seconds: 7 }); } },
+  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(['chill', 'serene', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
   waking: { act: 'just waking up from a nap', start: () => { applyFace({ mood: 'sleepy' }); setTimeout(() => { if (!voice.connected) { react('sleepy', 900); setTimeout(() => !voice.connected && applyFace({ mood: pick(['chill', 'curious']) }), 900); } }, 1400); } }
 };
 function pickScene() {
@@ -3362,6 +3355,63 @@ const sfx = (() => {
   };
 })();
 
+
+/* ================= her real voice, even off a call ================= */
+/* Little reactions recorded in her own voice (ElevenLabs, eleven_v4), so a poke, a pat or a tickle gets a real
+   "eep!", a giggle or a sleepy "five more minutes" even when she isn't in a chat. They live in one small audio file
+   that loads in the background, never repeat back to back, and her mouth moves with them. In a chat her brain answers
+   touches out loud itself instead. */
+const VO_URL = 'voice/lumi-reactions-v1';
+const VO = { ctx: null, buf: null, idx: null, loading: null, src: null, until: 0, last: {}, env: null, t0: 0, s: 0, lastAt: 0, mouth: false };
+const VO_CAT = { eye: 'eye', cheek: 'cheek', mouth: 'mouth', headtap: 'tap', facetap: 'tap', pat: 'pat', rubhead: 'pat', pet: 'pat', rubcheek: 'rubcheek',
+  tickle: 'tickle', spam: 'spam', squish: 'squish', stretch: 'stretch', swipe: 'whoa', swing: 'swing', shake: 'shake', spin: 'spin', flip: 'flip' };
+const VO_P = { tap: .6, eye: .9, cheek: .8, mouth: .85, pat: .55, rubcheek: .75, tickle: .95, spam: 1, squish: .8, stretch: .8, whoa: .75, swing: .9, shake: .95, spin: .95, flip: 1, sleepy: .75, sleepypat: .65, waking: 1 };
+function voLoad() {
+  if (VO.loading) return VO.loading;
+  VO.loading = (async () => {
+    if (!VO.ctx) VO.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const [ix, ab] = await Promise.all([fetch(VO_URL + '.json').then(r => r.json()), fetch(VO_URL + '.mp3').then(r => r.arrayBuffer())]);
+    VO.idx = ix.lines || []; VO.buf = await VO.ctx.decodeAudioData(ab);
+    // how loud she is every 20 ms, for her mouth
+    const ch = VO.buf.getChannelData(0), fr = Math.round(VO.buf.sampleRate * .02), env = new Float32Array(Math.ceil(ch.length / fr));
+    for (let f = 0; f < env.length; f++) { let s2 = 0, n = 0; for (let i = f * fr, e = Math.min(ch.length, (f + 1) * fr); i < e; i += 2) { s2 += ch[i] * ch[i]; n++; } env[f] = Math.sqrt(s2 / Math.max(1, n)); }
+    VO.env = env; dbg.vo = VO.idx.length;
+  })().catch(e => { VO.loading = null; dbg.voErr = String((e && e.message) || e); });
+  return VO.loading;
+}
+/* say one of her lines from a category (p = how likely she bothers) */
+function voSay(cat, p) {
+  if (voice.connected || voice.connecting) return false;   // in a chat she speaks for herself
+  const now = performance.now();
+  if (p != null && Math.random() > p) return false;
+  if (!VO.buf || !VO.idx) { voLoad(); return false; }
+  if (cat !== 'waking' && (now < VO.until - 120 || now - VO.lastAt < 600)) return false;   // still saying the last one
+  const pool = []; VO.idx.forEach((x, i) => { if (x.c.includes(cat)) pool.push(i); });
+  if (!pool.length) return false;
+  const opts = pool.length > 1 ? pool.filter(i => i !== VO.last[cat]) : pool, i = pick(opts), line = VO.idx[i];
+  VO.last[cat] = i;
+  try {
+    if (VO.src) try { VO.src.stop(); } catch (e) {}
+    const a = VO.ctx; if (a.state === 'suspended') a.resume();
+    const src = a.createBufferSource(), g = a.createGain(), dur = line.e - line.s;
+    src.buffer = VO.buf; g.gain.value = (S.herVol == null ? 1 : S.herVol);
+    src.connect(g); g.connect(a.destination); src.start(a.currentTime + .01, line.s, dur);
+    VO.src = src; VO.s = line.s; VO.t0 = now + 10 + ((a.outputLatency || 0) + (a.baseLatency || 0)) * 1000; VO.until = VO.t0 + dur * 1000; VO.lastAt = now;
+    src.onended = () => { if (VO.src === src) VO.src = null; };
+    dbg.voLast = line.t; dbg.voN = (dbg.voN || 0) + 1;
+  } catch (e) { return false; }
+  return true;
+}
+/* while a line plays her mouth follows it */
+function voTick(now) {
+  const on = VO.env && now < VO.until + 100 && !voice.connected;
+  if (!on) { if (VO.mouth) { VO.mouth = false; simVoice = null; st.speaking = false; lipReset(); } return; }
+  const t = VO.s + (now + 30 - VO.t0) / 1000;
+  const r = now < VO.t0 ? 0 : (VO.env[Math.min(VO.env.length - 1, Math.floor(t / .02))] || 0);
+  const level = r < .012 ? 0 : clamp(Math.pow(r / .2, .8), 0, 1);
+  simVoice = { level, shape: level > .7 ? 'A' : level > .45 ? 'E' : level > .2 ? 'C' : 'U' }; st.speaking = true; VO.mouth = true;
+}
+
 /* ================= how she feels: a small inner state that colors every reflex ================= */
 /* Annoyance builds with rude stuff and fades, affection grows with gentle stuff (and is kept between
    visits), excitement spikes and settles. Every reflex is drawn fresh from that state, so the same poke
@@ -3401,14 +3451,53 @@ const FEEL = {
   peace:    { pool: H => [[1, ['wink', 'happy']], [.6, ['smug', 'wink']]], fx: ['twinkle'] },
   love:     { d: { affection: .05 }, pool: H => [[1, ['smitten', 'flustered']], [.7, ['smitten', 'happy']]], fx: ['hearts'], blush: 1, dur: 1.5 }
 };
+
+/* her newer faces join every reflex too, so touches don't keep landing on the same two or three */
+const FEEL_MORE = {
+  eye: H => [[.8, ['cringe', 'grumpy']], [.4 + H.annoy, ['angry', 'grumpy']], [.3, ['ko', 'dizzy']]],
+  cheek: H => [[.6, ['bleh', 'flustered']], [.5 * H.affection, ['kissy', 'flustered']], [.5, ['confused', 'curious']], [.4, ['nervous', 'flustered']]],
+  mouth: H => [[.6, ['bleh', 'happy']], [.5, ['kissy', 'flustered']], [.4, ['confused', 'shook']], [.3, ['mischievous', 'smug']]],
+  headtap: H => [[.6, ['confused', 'curious']], [.5, ['blank', 'curious']], [.4, ['proud', 'smug']]],
+  pat: H => [[.8, ['serene', 'smitten']], [.6, ['proud', 'happy']], [.5 * H.affection, ['kissy', 'smitten']]],
+  rubhead: H => [[.8, ['serene', 'sleepy']], [.5, ['laughing', 'happy']]],
+  rubcheek: H => [[.6, ['laughing', 'flustered']], [.4, ['kissy', 'flustered']], [.4, ['nervous', 'flustered']]],
+  tickle: H => [[1.3, ['laughing', 'flustered']], [.6, ['laughing', 'crying']], [.4, ['ko', 'laughing']]],
+  pet: H => [[.8, ['serene', 'smitten']], [.4, ['kissy', 'smitten']]],
+  facetap: H => [[.6, ['confused', 'curious']], [.4, ['blank', 'shook']], [.4, ['mischievous', 'smug']], [.3, ['bleh', 'wink']]],
+  swipe: H => [[.5, ['shook', 'awe']], [.4, ['angry', 'dizzy']]],
+  squish: H => [[.6, ['bleh', 'flustered']], [.4, ['angry', 'grumpy']], [.4, ['nervous', 'shook']]],
+  stretch: H => [[.5, ['laughing', 'shook']], [.4, ['ko', 'dizzy']]],
+  spam: H => [[1 + H.annoy, ['angry', 'grumpy']], [.5, ['sulky', 'grumpy']], [.3, ['ko', 'unimpressed']]],
+  shake: H => [[.7, ['ko', 'dizzy']], [.5, ['angry', 'dizzy']], [.4, ['nervous', 'shook']]],
+  swing: H => [[.5, ['awe', 'shook']], [.4, ['nervous', 'shook']]],
+  spin: H => [[.6, ['ko', 'dizzy']], [.5, ['laughing', 'dizzy']]],
+  flip: H => [[.5, ['confused', 'dizzy']], [.4, ['bleh', 'dizzy']]],
+  smiled: H => [[.5, ['serene', 'happy']], [.4, ['mischievous', 'smug']]],
+  waved: H => [[.5, ['laughing', 'happy']]],
+  thumbup: H => [[.6, ['proud', 'starry']]],
+  thumbdown: H => [[.6, ['sulky', 'grumpy']], [.3, ['angry', 'grumpy']]],
+  love: H => [[.6, ['kissy', 'smitten']]]
+};
+const SOFT_TOUCH = new Set(['pat', 'rubhead', 'pet', 'rubcheek']), ROUGH_TOUCH = new Set(['shake', 'spin', 'swing', 'flip', 'spam']);
+/* touched while she's asleep: she stirs in all sorts of ways instead of the same startled blink every time */
+function sleepyTouch(kind) {
+  const soft = SOFT_TOUCH.has(kind), rough = ROUGH_TOUCH.has(kind);
+  const other = soft ? pick(['smitten', 'serene', 'happy', 'kissy']) : kind === 'tickle' ? pick(['laughing', 'flustered'])
+    : rough ? pick(['shook', 'dizzy', 'angry']) : kind === 'eye' ? pick(['grumpy', 'cringe', 'shook'])
+    : pick(['grumpy', 'unimpressed', 'sulky', 'confused', 'shook', 'curious']);
+  reactMix('sleepy', other, soft ? rnd(.25, .5) : rnd(.3, .68), { open: rnd(.5, .95), tilt: rnd(-.6, .6) }, rnd(900, 1900));
+  if (soft) { sfx.coo(); st.blushBoost = Math.max(st.blushBoost, rnd(.5, .9)); if (chance(.45)) effect(pick(['hearts', 'blush'])); }
+  else { sfx.boop(rnd(.7, .9)); if (chance(.3)) bump(rnd(.3, .6)); }
+  voSay(soft || kind === 'tickle' ? 'sleepypat' : 'sleepy', soft ? VO_P.sleepypat : VO_P.sleepy);
+}
 function feel(kind, k = 1) {
   const F = FEEL[kind]; if (!F) return;
   const now = performance.now(), H = heart, still = reduceMQ.matches;
   heartTick(now); poke();
   for (const key in (F.d || {})) H[key] = clamp(H[key] + F.d[key] * k, 0, 1);
   if (F.d && F.d.affection) { S.affection = Math.round(H.affection * 1000) / 1000; saveSettings(); }
-  if (st.base.id === 'sleepy' && !voice.connected && kind !== 'screen') { reactMix('shook', 'sleepy', rnd(.2, .6), { open: rnd(.7, 1) }, rnd(500, 900)); sfx.boop(rnd(.7, .9)); return; }
-  const [a, b] = wpick(F.pool(H));
+  if (st.base.id === 'sleepy' && !voice.connected && kind !== 'screen') { sleepyTouch(kind); return; }
+  const [a, b] = wpick(F.pool(H).concat(FEEL_MORE[kind] ? FEEL_MORE[kind](H) : []));
   const dials = { raise: rnd(-.35, .35), angle: H.annoy > .5 ? -rnd(.2, .7) : rnd(-.3, .4), open: rnd(.85, 1.2), tilt: rnd(-.7, .7) };
   reactMix(a, b, rnd(.15, .65), dials, rnd(1100, 2500) * (F.dur || 1));
   if (F.fx && chance(.65)) effect(pick(F.fx));
@@ -3422,6 +3511,7 @@ function feel(kind, k = 1) {
   if (F.eye) { st.eyeOvr = F.eye; st.eyeOvrUntil = now + rnd(1800, 3000); }
   if (F.coo) sfx.coo(); else if (F.say) sfx.boop(rnd(.85, 1.25));
   if (F.say) touchLog(kind, F.say);
+  if (VO_CAT[kind]) voSay(VO_CAT[kind], VO_P[VO_CAT[kind]]);
 }
 
 /* ================= her mind gets the gist, and decides what she really feels ================= */
@@ -3429,7 +3519,7 @@ const tlog = { items: [], timer: 0, lastTurn: 0 };
 const MAJOR = new Set(['pat', 'rubhead', 'rubcheek', 'tickle', 'pet', 'spam', 'shake', 'swing', 'spin', 'flip', 'squish', 'stretch', 'eye']);
 function touchLog(kind, text) {
   tlog.items.push({ kind, text, t: performance.now() });
-  clearTimeout(tlog.timer); tlog.timer = setTimeout(flushTouch, 1300);
+  clearTimeout(tlog.timer); tlog.timer = setTimeout(flushTouch, 900);
 }
 function flushTouch() {
   const items = tlog.items.splice(0); if (!items.length) return;
@@ -3438,9 +3528,8 @@ function flushTouch() {
   parts.push(n > 1 ? `${lastText} (${n === 2 ? 'twice' : n + ' times'})` : lastText);
   const mood = heart.annoy > .6 ? 'you\'re pretty fed up right now' : heart.annoy > .3 ? 'you\'re a bit annoyed' : heart.affection > .75 ? 'you\'re feeling soft on them' : '';
   const text = '[touch] They ' + parts.join(', then ') + '.' + (mood ? ' (Inside, ' + mood + '.)' : '');
-  const big = items.length >= 2 || items.some(i => MAJOR.has(i.kind));
   const now = performance.now();
-  if (big && voice.connected && now - tlog.lastTurn > 7000) { tlog.lastTurn = now; senseTurn(text + ' Your body already flinched on its own; now react however you actually feel: a face, a few words, or nothing at all with skip_turn.', true); }
+  if (voice.connected && now - tlog.lastTurn > 3500) { tlog.lastTurn = now; senseTurn(text + ' Your body already flinched on its own; now react out loud right away, however you actually feel: a giggle, an eep, a grumble, a few words. Fresh every time.', true); }
   else senseNote(text);
 }
 
@@ -4313,8 +4402,8 @@ function sleepPoke(now) {
   nap.pokes = nap.pokes.filter(t => now - t < 4000); nap.pokes.push(now);
   const n = nap.pokes.length, awake = standby.scene && standby.scene !== 'asleep';
   if (n === 1) { if (!awake) react('sleepy', 900); }
-  else if (n === 2) { if (!awake) react(pick(['grumpy', 'unimpressed']), 1100); }
-  else { nap.pokes = []; wakeBy('poke', ''); }
+  else if (n === 2) { if (!awake) react(pick(['grumpy', 'unimpressed', 'sulky', 'confused']), 1100); }
+  else { nap.pokes = []; const said = voSay('waking', 1); setTimeout(() => wakeBy('poke', ''), said ? Math.max(0, VO.until - performance.now()) + 150 : 0); }
 }
 function stopWakeWord() { ww.want = false; if (ww.rec) { try { ww.rec.abort(); } catch (e) {} ww.rec = null; } }
 
@@ -4458,7 +4547,7 @@ function renderVU() {
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(.05, Math.max(0, (now - last) / 1000)); last = now;
-  sampleVoice();
+  voTick(now); sampleVoice();
   trackEyes(now);
   trackObjects(now);
   autonomyTick(now); needsTick(now); dreamTick(now); roamTick(now, dt); standbyTick(now);
@@ -4496,6 +4585,7 @@ addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.ta
 applyBare();
 syncLab(); renderPanel();
 if (!ENV.artifact) { enterStandby(pickScene()); noticeYou(); }
+setTimeout(voLoad, 1500);   // her recorded voice, ready before your first touch
 // she starts listening for you after your first touch (browsers need one before mic and sound work)
 addEventListener('pointerup', () => setTimeout(startWakeWord, 300), { once: true });
 startWakeWord();
@@ -4504,7 +4594,7 @@ try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

@@ -1584,9 +1584,9 @@ function renderFace(now) {
   ctx = fctx;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, fc.width, fc.height);
-  const r = st.region, s = faceScale() * roam.z, cx = r.x + r.w / 2 + roam.x, cy = r.y + r.h / 2 + r.h * .02 + roam.y;
+  const FG = faceGeo(), s = FG.s, cx = FG.cx, cy = FG.cy;
   const ox = st.gx * 1.4, oy = st.gy * 1.0 + st.hop;
-  const g = S.glow / 100, faceA = 1 - clamp(st.hide, 0, 1);
+  const g = S.glow / 100, faceA = (1 - clamp(st.hide, 0, 1)) * FG.a;
   const layer = (blur, alpha, withFx, halo) => {
     if (faceA < .02) return;
     alpha *= faceA;
@@ -1595,7 +1595,7 @@ function renderFace(now) {
     GLOWC = inkFor(tint.amt * (halo ? 1 : .9));
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
-    ctx.translate(ox + st.danceX + mgShake.x, oy + mgShake.y); ctx.rotate(st.head + st.danceTilt + roam.tilt);
+    ctx.translate(ox + st.danceX + mgShake.x, oy + mgShake.y); ctx.rotate(st.head + st.danceTilt + roam.tilt + FG.rot);
     ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
@@ -1609,10 +1609,14 @@ function renderFace(now) {
     gr.addColorStop(0, inkFor(1, .085 * tint.amt * g * faceA)); gr.addColorStop(1, inkFor(1, 0));
     ctx.fillStyle = gr; ctx.fillRect(cx - 80 * s, cy - 80 * s, 160 * s, 160 * s); ctx.restore();
   }
+  renderStage(now, 'back');
+  ctx = fctx;
   renderMG(now, cx, cy, s, g, faceA);
   if (g > 0) layer(g * s * DPR * 5.5, .5 * Math.min(1, g * 1.4), true, true);
   layer(s * DPR * .9 * (.3 + g), 1, true, false);
   INK = COL; GLOWC = COL;
+  renderStage(now, 'front');
+  ctx = fctx;
   // pop-up text above her head
   if (scr.pop) {
     const p = (now - scr.pop.t0) / 1700;
@@ -1716,6 +1720,7 @@ function composite(now) {
     mctx.save(); mctx.globalAlpha = scr.flashA; mctx.fillStyle = inkFor(tint.amt * .8); mctx.fillRect(0, 0, W, H); mctx.restore();
     scr.flashA *= .86;
   }
+  renderBlackout(now);
 }
 
 /* ================= behaviour ================= */
@@ -2135,6 +2140,7 @@ function roamBox(z) {
   return { r, hw, hh, mx: Math.max(0, r.w / 2 - hw), my: Math.max(0, r.h / 2 - hh) };
 }
 function roamTo(place, opts = {}) {
+  if (stage.me) stageFreeMe();   // she's moving herself again, off her stage marks
   place = String(place || 'center').toLowerCase().replace(/[\s-]+/g, '_');
   if (!PLACES.includes(place)) place = 'random';
   const now = performance.now();
@@ -2190,11 +2196,12 @@ function roamTick(now, dt) {
     roam.vx += (k * (roam.tx - roam.x) - c * roam.vx) * dt; roam.vy += (k * (roam.ty - roam.y) - c * roam.vy) * dt;
     roam.x += roam.vx * dt; roam.y += roam.vy * dt;
   }
-  roam.vz += (90 * (roam.tz - roam.z) - 2 * Math.sqrt(90) * roam.vz) * dt; roam.z = clamp(roam.z + roam.vz * dt, .35, 1.8);
+  roam.vz += (90 * (roam.tz - roam.z) - 2 * Math.sqrt(90) * roam.vz) * dt; roam.z = clamp(roam.z + roam.vz * dt, .2, 5);
   roam.tilt = lerp(roam.tilt, clamp(-roam.vx / 2600, -.22, .22), .2);
 }
 /* left to herself, she sometimes scoots somewhere else on her screen */
 function roamIdle() {
+  if (stage.me) return;
   const opts = [[3, 'random'], [1, 'peek_left'], [1, 'peek_right'], [.7, 'peek_bottom'], [needs.hype > .6 ? 2 : .5, 'wander'], [.6, 'close'], [.5, 'far'], [.5, 'top'], [.5, 'bottom']];
   roamTo(wpick(opts), { speed: needs.energy < .35 ? 'slow' : pick(['slow', 'normal', 'normal']), seconds: rnd(4, 9) });
 }
@@ -2213,12 +2220,13 @@ const SCENES = {
   peek: { act: 'peeking in from the edge of your screen', start: () => { applyFace({ mood: 'curious' }); roamTo(pick(['peek_left', 'peek_right', 'peek_bottom']), { speed: 'normal' }); } },
   wander: { act: 'wandering around your screen', start: () => { applyFace({ mood: pick(['chill', 'smug', 'determined', 'mischievous']) }); roamTo('wander', { seconds: 7 }); } },
   hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(ENV.artifact ? ['chill', 'happy'] : ['chill', 'serene', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
+  world: { act: 'hanging out in a little world you built', start: () => { const b = stageBook(); if (!b.length) { applyFace({ mood: 'chill' }); return; } const w = pick(b); standby.activity = `hanging out in "${w.name}", a little world you built`; stageCall({ reuse: w.name, steps: [], _standby: true, transition: 'fade' }); applyFace({ mood: pick(['chill', 'curious', 'smug', 'serene']) }); } },
   waking: { act: 'just waking up from a nap', start: () => { applyFace({ mood: 'sleepy' }); setTimeout(() => { if (!voice.connected) { react('sleepy', 900); setTimeout(() => !voice.connected && applyFace({ mood: pick(['chill', 'curious']) }), 900); } }, 1400); } }
 };
 function pickScene() {
   const h = new Date().getHours(), late = h >= 23 || h < 6, e = needs.energy;
   return wpick([[ENV.artifact ? (late ? 3 : .15) + (e < .15 ? 1.5 : 0) : (late ? 3 : .35) + (e < .3 ? 3 : 0), 'asleep'], [2, 'idle'], [1.2, 'doodle'], [1, 'daydream'], [1, 'peek'],
-    [needs.hype > .5 ? 1.5 : .7, 'wander'], [.8, 'hum'], [e < .5 ? 1.2 : .5, 'waking']]);
+    [needs.hype > .5 ? 1.5 : .7, 'wander'], [.8, 'hum'], [e < .5 ? 1.2 : .5, 'waking'], [stageBook().length ? .7 : 0, 'world']]);
 }
 function standbyDoodle() {
   if (voice.connected) return;
@@ -2231,6 +2239,7 @@ function enterStandby(scene) {
   standby.scene = scene; standby.since = performance.now(); standby.activity = SCENES[scene].act;
   st.mix = null; st.dials = blankDials();
   if (scr.power !== 'on') powerOn();
+  if (scene !== 'world' && stageOn()) stageClear(voice.connected ? 'fade' : 'instant');
   roamHome(); SCENES[scene].start(); syncLab();
   const h = new Date().getHours(), late = h >= 23 || h < 6;
   // inside Claude (no voice chats) she stays up much longer before dozing
@@ -2364,6 +2373,7 @@ async function wake(force) {
         arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; if ((params || {}).action === 'start') { needBump('boredom', -.35); needBump('hype', .1); } return arcade(params || {}); },
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
         web: params => webTool(params || {}),
+        scene: params => { dbg.scene = (dbg.scene || 0) + 1; needBump('boredom', -.12); needBump('hype', .04); return stageCall(params || {}); },
         move: params => { dbg.move = (dbg.move || 0) + 1; params = params || {}; needBump('boredom', -.05); return roamTo(params.to || params.where, params); },
         volume: params => {
           params = params || {}; let v = S.herVol == null ? 1 : S.herVol;
@@ -2485,6 +2495,8 @@ function sendSessionNote(greet) {
   if (dreams.length) parts.push(`[dreams] While you slept you dreamt about: ${dreams.join('; ')}. Mention one if it fits, in your own words.`);
   if ((needs.heard || []).length) parts.push(`[dreams] In your sleep you half-heard them say: "${needs.heard.join('", "')}". You might bring it up, a bit fuzzy.`);
   needs.dreams = []; needs.heard = []; saveNeeds();
+  const worlds = stageBook();
+  if (worlds.length) parts.push('[scenes] Worlds you built and named before. Bring one back with scene reuse only if you feel like it: ' + worlds.map(w => w.name).join(', '));
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
   if (greet && !voice.heard && roomQuiet(performance.now())) {
     const W = voice.woke || { how: 'tap', phrase: '', style: 'groggy' };
@@ -3543,8 +3555,9 @@ function flushTouch() {
 /* ================= touch: poke, pat, rub, tickle, squish, drag, swipe ================= */
 const touch = { down: null, pokes: [], pats: [], longT: 0, motionAsked: false, lastShake: 0, shakeHits: [], pts: new Map(), pinch: null };
 function faceCoords(px, py) {
-  const r = st.region, s = faceScale() * roam.z, cx = r.x + r.w / 2 + roam.x, cy = r.y + r.h / 2 + r.h * .02 + roam.y;
-  return [(px - cx) / s - st.gx * 1.4, (py - cy) / s - st.gy - st.hop];
+  const G = faceGeo(), s = G.s; let dx = px - G.cx, dy = py - G.cy;
+  if (G.rot) { const c = Math.cos(-G.rot), n = Math.sin(-G.rot), t = dx * c - dy * n; dy = dx * n + dy * c; dx = t; }
+  return [dx / s - st.gx * 1.4, dy / s - st.gy - st.hop];
 }
 function zoneAt(px, py) {
   if (st.hide > .5 || scr.power !== 'on') return 'screen';
@@ -3568,6 +3581,7 @@ cv.addEventListener('pointerdown', e => {
   const now = performance.now();
   nd.lastTouch = now;
   if (!(e.clientX > innerWidth * .76 && e.clientY < innerHeight * .16)) sleepPoke(now);   // the menu corner isn't a poke
+  if (stageTap(e.clientX, e.clientY, now)) return;
   if (gameTap(e.clientX, e.clientY, now)) return;
   try { cv.setPointerCapture(e.pointerId); } catch (er) {}
   touch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -4555,6 +4569,547 @@ function renderVU() {
   vuEls.forEach((el, i) => el.classList.toggle('f', i < n));
 }
 
+/* ================= her stage: worlds she builds around herself and animates, live ================= */
+/* All hers. She draws every piece on the spot (SVG paths, flipbook frames, words), puts them anywhere on the screen
+   behind or in front of her face, gives the world a ground, a sky and weather, and choreographs it on a timeline:
+   pieces moving, growing, spinning, swapping drawings, appearing and leaving, the camera zooming, panning, tilting and
+   shaking, her own face going wherever she wants at any size, with sounds, screen cues, phone buzzes and her
+   expressions landing on the beats. Positions are screen percentages (0,0 top left), sizes are a percentage of the
+   screen's shorter side, so everything fits any phone. Taps on pieces she marks tappable come back to her. */
+const STAGE_KEY = 'lumi-live:scenes';
+const stage = {
+  els: [], world: null, worldOld: null, me: null,
+  cam: { x: 0, y: 0, z: 1, rot: 0 }, shake: { amp: 0, until: 0, x: 0, y: 0 },
+  tweens: [], progs: [], t0: 0, lastCall: 0, life: 0, black: { until: 0, fadeT: 0 },
+  taps: [], tapFlush: 0, standby: false, name: ''
+};
+const ST_EASE = {
+  linear: t => t,
+  smooth: t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,
+  in: t => Math.pow(t, 2.4),
+  out: t => 1 - Math.pow(1 - t, 3),
+  spring: t => t >= 1 ? 1 : 1 - Math.exp(-7 * t) * Math.cos(12 * t),
+  back: t => backOut(t),
+  bounce: t => { const n = 7.5625, d = 2.75; if (t < 1 / d) return n * t * t; if (t < 2 / d) return n * (t -= 1.5 / d) * t + .75; if (t < 2.5 / d) return n * (t -= 2.25 / d) * t + .9375; return n * (t -= 2.625 / d) * t + .984375; },
+  snap: () => 1
+};
+const ST_MOTIONS = ['still', 'float', 'bob', 'sway', 'spin', 'pulse', 'flicker', 'jitter', 'wobble', 'drift', 'orbit', 'hop'];
+const ST_SWARMS = ['fall', 'snow', 'rise', 'drift', 'stream_left', 'stream_right', 'twinkle', 'scatter', 'orbit', 'burst'];
+const ST_APPEARS = ['draw', 'pop', 'fade', 'drop', 'rise', 'slide', 'zoom', 'glitch', 'type', 'instant'];
+const ST_EXITS = ['fade', 'pop', 'fall', 'fly', 'glitch', 'erase', 'shrink', 'instant'];
+const stNum = (v, d, a, b) => isNum(v) ? clamp(+v, a, b) : d;
+const stStr = (v, list, d) => { const s = String(v == null ? '' : v).toLowerCase().trim().replace(/[\s-]+/g, '_'); return list.includes(s) ? s : d; };
+const minSide = () => Math.min(innerWidth, innerHeight);
+function stShape(d) { if (!d) return null; const polys = parsePath(String(d).slice(0, 4000)); if (!polys.length) return null; const sh = normalize(polys); sh.closed = sh.polys.map(P => P.length > 3 && Math.hypot(P[0][0] - P[P.length - 1][0], P[0][1] - P[P.length - 1][1]) < .02); return sh; }
+function stList(v) { return parseList(v).filter(q => q && typeof q === 'object'); }
+
+/* the camera: zoom around the screen's centre, pan by screen percent, tilt; pieces further back move less */
+function camOf(depth) {
+  const c = stage.cam, d = depth == null ? 1 : clamp(+depth, 0, 2);
+  return { z: Math.max(.05, 1 + (c.z - 1) * d), x: (c.x * innerWidth / 100 + stage.shake.x) * d, y: (c.y * innerHeight / 100 + stage.shake.y) * d, rot: c.rot * d };
+}
+function camPt(px, py, K) {
+  const cx = innerWidth / 2, cy = innerHeight / 2;
+  let dx = (px - cx) * K.z, dy = (py - cy) * K.z;
+  if (K.rot) { const c = Math.cos(K.rot), s = Math.sin(K.rot), t = dx * c - dy * s; dy = dx * s + dy * c; dx = t; }
+  return [cx + dx - K.x, cy + dy - K.y];
+}
+const camMoved = () => stage.cam.z !== 1 || stage.cam.x || stage.cam.y || stage.cam.rot || stage.shake.amp;
+/* where her face is and how big: her own roaming, or wherever she's put herself on her stage, seen through the camera */
+function faceGeo() {
+  const r = st.region; let s = faceScale(), cx, cy, rot = 0, a = 1;
+  if (stage.me) { cx = stage.me.x * innerWidth / 100; cy = stage.me.y * innerHeight / 100; s *= stage.me.z; rot = stage.me.rot; a = clamp(stage.me.a, 0, 1); }
+  else { s *= roam.z; cx = r.x + r.w / 2 + roam.x; cy = r.y + r.h / 2 + r.h * .02 + roam.y; }
+  if (camMoved()) { const K = camOf(1); [cx, cy] = camPt(cx, cy, K); s *= K.z; rot += K.rot; }
+  return { cx, cy, s, rot, a };
+}
+/* take her face over from her roaming, starting from exactly where it is now */
+function stageMe() {
+  if (stage.me) return stage.me;
+  const r = st.region, s0 = faceScale();
+  stage.me = { x: (r.x + r.w / 2 + roam.x) / innerWidth * 100, y: (r.y + r.h / 2 + r.h * .02 + roam.y) / innerHeight * 100, z: roam.z, rot: 0, a: 1, s0 };
+  return stage.me;
+}
+/* hand her face back to her roaming, springing home from wherever the stage left it */
+function stageFreeMe() {
+  const m = stage.me; if (!m) return;
+  stage.tweens = stage.tweens.filter(t => t.obj !== m);
+  const r = st.region;
+  roam.x = m.x * innerWidth / 100 - (r.x + r.w / 2); roam.y = m.y * innerHeight / 100 - (r.y + r.h / 2 + r.h * .02); roam.z = clamp(m.z, .2, 5);
+  roam.vx = roam.vy = roam.vz = 0; stage.me = null; roamHome();
+}
+
+/* one of her pieces */
+function mkStageEl(q, now) {
+  const e = {
+    src: Object.assign({}, q), id: String(q.id || ('s' + Math.random().toString(36).slice(2, 6))).slice(0, 24),
+    shape: null, frames: null, fps: stNum(q.fps, 6, .5, 24), frame: isNum(q.frame) ? Math.round(+q.frame) : null,
+    text: q.text != null && String(q.text).trim() ? String(q.text).slice(0, 40) : '',
+    x: stNum(q.x, 50, -200, 300), y: stNum(q.y, 50, -200, 300), size: stNum(q.size, q.text ? 8 : 20, .5, 600),
+    rot: stNum(q.rotate, 0, -3600, 3600) * Math.PI / 180, a: stNum(q.opacity, 1, 0, 1), punch: 0,
+    flip: isTrue(q.flip), layer: stStr(q.layer, ['back', 'front'], 'back'), solid: isTrue(q.solid), depth: stNum(q.depth, 1, 0, 2),
+    motion: stStr(q.motion, ST_MOTIONS, 'still'), speed: stNum(q.speed, 1, .1, 6), tap: isTrue(q.tap),
+    swarm: null, born: now, appear: 'draw', drawDur: 600, out: 0, exit: 'fade', ph: Math.random() * TAU, prev: null, prevT: 0
+  };
+  if (Array.isArray(q.frames) && q.frames.length) e.frames = q.frames.slice(0, 12).map(stShape).filter(Boolean);
+  else if (typeof q.frames === 'string' && q.frames.includes('|')) e.frames = q.frames.split('|').slice(0, 12).map(stShape).filter(Boolean);
+  if (e.frames && !e.frames.length) e.frames = null;
+  e.shape = e.frames ? e.frames[0] : stShape(q.paths);
+  const sw = stStr(q.swarm, ST_SWARMS, '');
+  if (sw && (e.shape || e.text)) {
+    const n = clamp(Math.round(stNum(q.count, 12, 1, 40)), 1, 40), items = [];
+    for (let i = 0; i < n; i++) items.push({ u: Math.random(), v: Math.random(), ph: Math.random(), s: rnd(.7, 1.3), spin: rnd(-1, 1), a: i / n * TAU + rnd(-.3, .3) });
+    e.swarm = { pattern: sw, items, t0: now };
+    if (!isNum(q.size)) e.size = 5;
+  }
+  const len = e.shape ? e.shape.len : 4;
+  e.appear = stStr(q.appear, ST_APPEARS, e.text && !e.shape ? 'type' : e.shape ? 'draw' : 'pop');
+  e.drawDur = e.appear === 'instant' ? 0 : e.appear === 'draw' ? clamp(250 + len * 170, 380, 1900) : e.appear === 'type' ? clamp(e.text.length * 55, 200, 1600) : e.appear === 'drop' || e.appear === 'rise' ? 650 : 420;
+  if (!e.shape && !e.text) return null;
+  return e;
+}
+function stageFind(id) { return stage.els.find(e => e.id === String(id) && !e.out); }
+function stageExit(e, how, now) { if (!e || e.out) return; e.out = now; e.exit = stStr(how, ST_EXITS, 'fade'); if (e.exit === 'instant') e.out = now - 1e4; if (e.exit === 'glitch') sfx.static(); }
+
+/* the world around her: ground, sky, weather */
+function mkWorld(w) {
+  if (!w || typeof w !== 'object') return null;
+  const o = {
+    ground: stStr(w.ground, ['none', 'line', 'grid', 'dots', 'waves', 'hills'], 'none'),
+    sky: stStr(w.sky, ['none', 'stars', 'dust', 'grid', 'rays'], 'none'),
+    weather: stStr(w.weather, ['none', 'rain', 'snow', 'wind', 'embers', 'bubbles', 'static', 'leaves'], 'none'),
+    horizon: stNum(w.horizon, 68, 5, 98), scroll: stNum(w.scroll, 0, -4, 4), wind: stNum(w.wind, 0, -1, 1),
+    amount: stNum(w.amount, 1, .2, 2.5), t0: performance.now(), seed: []
+  };
+  for (let i = 0; i < 160; i++) o.seed.push([Math.random(), Math.random(), Math.random()]);
+  if (o.ground === 'none' && o.sky === 'none' && o.weather === 'none') return null;
+  return o;
+}
+function stageWorld(w) { if (stage.world) { stage.worldOld = stage.world; stage.worldOld.outT = performance.now(); } stage.world = mkWorld(w); }
+
+/* timeline: each call's steps are a little program; steps without 'at' start when the one before ends */
+function stageProgram(list, loop, now) {
+  const steps = []; let cursor = 0, total = 0;
+  for (const s of list.slice(0, 40)) {
+    const at = isNum(s.at) ? clamp(+s.at, 0, 120) : cursor, dur = stNum(s.seconds, .5, 0, 60);
+    steps.push({ s, at, dur }); cursor = at + dur; total = Math.max(total, at + dur);
+  }
+  if (!steps.length) return null;
+  const loops = loop === true || loop === 'true' ? 999 : clamp(Math.round(+loop || 0), 0, 50);
+  const P = { steps, total, t0: now, next: 0, loops };
+  stage.progs.push(P); if (stage.progs.length > 6) stage.progs.shift();
+  return P;
+}
+function stageTween(obj, key, to, dur, ease, now) {
+  stage.tweens = stage.tweens.filter(t => !(t.obj === obj && t.key === key));
+  if (!(dur > 0) || ease === 'snap' || reduceMQ.matches && obj === stage.cam) { obj[key] = to; return; }
+  stage.tweens.push({ obj, key, from: obj[key], to, t0: now, dur: dur * 1000, ease: ST_EASE[ease] || ST_EASE.smooth });
+}
+function stageRunStep(s, dur, now) {
+  const ease = stStr(s.ease, Object.keys(ST_EASE), 'smooth');
+  const ids = String(s.target || '').split(/[\s,]+/).filter(Boolean);
+  for (const id0 of ids.length ? ids : []) {
+    const id = id0.toLowerCase();
+    if (id === 'me' || id === 'lumi' || id === 'face' || id === 'her') {
+      if (isTrue(s.free)) { stageFreeMe(); continue; }
+      const m = stageMe();
+      if (isNum(s.x) || isNum(s.dx)) stageTween(m, 'x', isNum(s.x) ? clamp(+s.x, -150, 250) : m.x + clamp(+s.dx, -300, 300), dur, ease, now);
+      if (isNum(s.y) || isNum(s.dy)) stageTween(m, 'y', isNum(s.y) ? clamp(+s.y, -150, 250) : m.y + clamp(+s.dy, -300, 300), dur, ease, now);
+      if (isNum(s.size) || isNum(s.scale)) stageTween(m, 'z', clamp(isNum(s.size) ? +s.size : m.z * +s.scale, .05, 12), dur, ease, now);
+      if (isNum(s.rotate) || isNum(s.spin)) stageTween(m, 'rot', isNum(s.rotate) ? +s.rotate * Math.PI / 180 : m.rot + +s.spin * Math.PI / 180, dur, ease, now);
+      if (isNum(s.opacity)) stageTween(m, 'a', clamp(+s.opacity, 0, 1), dur, ease, now);
+      continue;
+    }
+    if (id === 'camera' || id === 'cam' || id === 'view') {
+      const c = stage.cam;
+      if (isNum(s.zoom) || isNum(s.size)) stageTween(c, 'z', clamp(+(isNum(s.zoom) ? s.zoom : s.size), .2, 8), dur, ease, now);
+      if (isNum(s.x) || isNum(s.dx)) stageTween(c, 'x', isNum(s.x) ? clamp(+s.x, -200, 200) : c.x + clamp(+s.dx, -200, 200), dur, ease, now);
+      if (isNum(s.y) || isNum(s.dy)) stageTween(c, 'y', isNum(s.y) ? clamp(+s.y, -200, 200) : c.y + clamp(+s.dy, -200, 200), dur, ease, now);
+      if (isNum(s.rotate) || isNum(s.spin)) stageTween(c, 'rot', isNum(s.rotate) ? clamp(+s.rotate, -360, 360) * Math.PI / 180 : c.rot + clamp(+s.spin, -720, 720) * Math.PI / 180, dur, ease, now);
+      if (isTrue(s.reset)) { for (const [k, v] of [['z', 1], ['x', 0], ['y', 0], ['rot', 0]]) stageTween(c, k, v, dur, ease, now); }
+      continue;
+    }
+    if (id === 'world') { if (s.world) stageWorld(s.world); continue; }
+    const e = stageFind(id); if (!e) continue;
+    if (isNum(s.x) || isNum(s.dx)) stageTween(e, 'x', isNum(s.x) ? clamp(+s.x, -200, 300) : e.x + clamp(+s.dx, -400, 400), dur, ease, now);
+    if (isNum(s.y) || isNum(s.dy)) stageTween(e, 'y', isNum(s.y) ? clamp(+s.y, -200, 300) : e.y + clamp(+s.dy, -400, 400), dur, ease, now);
+    if (isNum(s.size) || isNum(s.scale)) stageTween(e, 'size', clamp(isNum(s.size) ? +s.size : e.size * +s.scale, .5, 600), dur, ease, now);
+    if (isNum(s.rotate) || isNum(s.spin)) stageTween(e, 'rot', isNum(s.rotate) ? +s.rotate * Math.PI / 180 : e.rot + +s.spin * Math.PI / 180, dur, ease, now);
+    if (isNum(s.opacity)) stageTween(e, 'a', clamp(+s.opacity, 0, 1), dur, ease, now);
+    if (s.paths) { const sh = stShape(s.paths); if (sh) { e.prev = e.shape; e.prevT = now; e.shape = sh; e.frames = null; e.born = now; e.appear = 'draw'; e.drawDur = clamp(200 + sh.len * 110, 260, 1000); } }
+    if (s.text != null && String(s.text).trim()) { e.text = String(s.text).slice(0, 40); if (!e.shape) { e.born = now; e.appear = 'type'; e.drawDur = clamp(e.text.length * 55, 200, 1600); } }
+    if (isNum(s.frame)) e.frame = Math.round(+s.frame); else if (s.frame === 'play' || s.frame === 'auto') e.frame = null;
+    if (s.motion) e.motion = stStr(s.motion, ST_MOTIONS, e.motion);
+    if (s.layer) e.layer = stStr(s.layer, ['back', 'front'], e.layer);
+    if (s.appear) { e.appear = stStr(s.appear, ST_APPEARS, 'pop'); e.born = now; e.drawDur = e.appear === 'instant' ? 0 : e.appear === 'draw' ? clamp(250 + (e.shape ? e.shape.len : 4) * 170, 380, 1900) : 420; if (!isNum(s.opacity) && e.a < .05) e.a = 1; }
+    if (s.exit) stageExit(e, s.exit, now);
+  }
+  // beats that ride along with any step
+  if (isNum(s.shake) && +s.shake > 0 && !reduceMQ.matches) { stage.shake.amp = clamp(+s.shake, 0, 1) * minSide() * .045; stage.shake.until = now + Math.max(.18, dur || .35) * 1000; }
+  if (s.sound) stageSound(s.sound);
+  if (s.notes) playSound({ notes: s.notes, wave: s.wave });
+  if (s.vibrate != null && navigator.vibrate) { try { const v = String(s.vibrate).split(/[\s,]+/).map(Number).filter(n => isFinite(n) && n >= 0).slice(0, 12).map(n => Math.min(1500, n)); if (v.length) navigator.vibrate(v.length === 1 ? v[0] : v); } catch (er) {} }
+  if (s.screen) {
+    const sc = String(s.screen).toLowerCase().replace(/[\s-]+/g, '_');
+    if (sc === 'blackout' || sc === 'cut_to_black' || sc === 'black') { stage.black.until = now + Math.max(.15, dur || .8) * 1000; stage.black.fadeT = 0; }
+    else if (SCREENS.includes(sc)) screenCue(sc, now);
+  }
+  if (s.mood) applyFace({ mood: String(s.mood).toLowerCase() });
+  if (s.pop_text) showPop(s.pop_text);
+}
+function stageSound(name) {
+  const n = String(name || '').toLowerCase().replace(/[\s-]+/g, '_'), N = sfx.note, H = sfx.hit;
+  const run = { whoosh: () => { H(.38, .05, 900); H(.3, .035, 2200, .06); }, swoosh: () => { H(.2, .05, 2800); }, thud: () => { N(120, 45, .22, .16); H(.09, .08, 200); },
+    boom: () => { N(85, 28, .9, .2); H(.7, .1, 120); H(.25, .06, 600); }, slam: () => { N(150, 40, .2, .16, 'triangle'); H(.16, .12, 320); H(.06, .05, 2400); },
+    pop: () => N(480, 1150, .07, .06), crash: () => { H(.7, .1, 3600); H(.45, .09, 900); N(220, 60, .3, .05, 'sawtooth'); }, zap: () => N(1900, 180, .2, .035, 'sawtooth'),
+    sparkle: () => { [1568, 2093, 2637, 3136].forEach((f, i) => N(f, f, .16, .025, 'triangle', i * .06)); }, rumble: () => { H(1.5, .08, 90); N(55, 38, 1.5, .08); },
+    tick: () => N(1800, 1800, .025, .03, 'square'), ding: () => { N(1319, 1319, .7, .05); N(2637, 2637, .45, .012, 'sine', .01); },
+    chime: () => { [1047, 1319, 1568].forEach((f, i) => N(f, f, .5, .035, 'sine', i * .09)); }, splash: () => { H(.55, .09, 1700); H(.35, .07, 600, .03); },
+    squish: () => { N(320, 90, .26, .08); H(.22, .06, 700); }, squeak: () => N(900, 1650, .12, .035, 'triangle'), creak: () => N(170, 260, .55, .03, 'sawtooth'),
+    beep: () => N(988, 988, .12, .03, 'square'), wobble: () => { [440, 520, 440, 360, 440].forEach((f, i) => N(f, f * 1.05, .09, .04, 'triangle', i * .08)); },
+    rise: () => N(220, 1400, .7, .04, 'triangle'), fall: () => N(1300, 160, .8, .04, 'triangle'), static: () => sfx.static(), power_on: () => sfx.powerOn(), power_off: () => sfx.powerOff(),
+    drumroll: () => { for (let i = 0; i < 14; i++) H(.05, .04 + i * .002, 260, i * .07); }, heartbeat: () => { N(70, 50, .12, .14); N(70, 50, .12, .1, 'sine', .2); } };
+  (run[n] || run.pop)();
+}
+
+/* her one entry point */
+function stageCall(p = {}) {
+  const now = performance.now();
+  let act = stStr(p.action, ['set', 'add', 'update', 'remove', 'play', 'clear'], '');
+  if (!act) act = p.reuse ? 'set' : (stage.els.length || stage.world) && !p.world ? (p.elements ? 'add' : 'play') : 'set';
+  stage.lastCall = now; stage.standby = !!p._standby;
+  const how = stStr(p.transition, ['cut', 'fade', 'static', 'flip', 'glitch'], '');
+  if (how === 'static') screenCue('static', now); else if (how === 'flip') screenCue('channel_flip', now); else if (how === 'glitch') screenCue('glitch', now);
+  if (act === 'clear') { stageClear(how === 'cut' ? 'instant' : 'fade'); return 'cleared'; }
+  let src = p;
+  if (p.reuse) {
+    const k = bookKey(p.reuse), b = stageBook(), hit = b.find(s => bookKey(s.name) === k) || b.find(s => bookKey(s.name).includes(k) && k.length > 2);
+    if (hit) src = Object.assign({}, hit, { steps: p.steps || hit.steps, loop: p.loop != null ? p.loop : hit.loop });
+  }
+  if (act === 'set') {
+    const quick = how === 'cut' || how === 'static' || how === 'flip' || how === 'glitch';
+    for (const e of stage.els) stageExit(e, quick ? 'instant' : 'fade', now);
+    stage.progs = []; stage.tweens = stage.tweens.filter(t => t.obj === stage.me || t.obj === stage.cam);
+    stageWorld(src.world); stage.t0 = now; stage.name = String(src.name || '').slice(0, 32);
+  } else if (src.world && act !== 'remove') stageWorld(src.world);
+  if (act === 'remove') {
+    const ids = new Set(String(p.ids || '').split(/[\s,]+/).filter(Boolean).concat(stList(p.elements).map(q => String(q.id))));
+    for (const e of stage.els) if (ids.has(e.id)) stageExit(e, p.exit || 'fade', now);
+  } else if (act === 'update') {
+    for (const q of stList(src.elements)) {
+      const e = stageFind(q.id); if (!e) continue;
+      const fresh = mkStageEl(Object.assign({}, e.src, q), now); if (!fresh) continue;
+      const keepPos = { x: isNum(q.x) ? fresh.x : e.x, y: isNum(q.y) ? fresh.y : e.y, size: isNum(q.size) ? fresh.size : e.size, rot: isNum(q.rotate) ? fresh.rot : e.rot, a: isNum(q.opacity) ? fresh.a : e.a };
+      const redraw = q.paths || q.frames || q.text != null;
+      if (fresh.swarm && e.swarm && fresh.swarm.pattern === e.swarm.pattern && fresh.swarm.items.length === e.swarm.items.length) fresh.swarm = e.swarm;
+      Object.assign(e, fresh, keepPos, { ph: e.ph }, redraw ? {} : { born: e.born, drawDur: e.drawDur, appear: e.appear });
+    }
+  } else if (act !== 'play') {
+    for (const q of stList(src.elements).slice(0, 40)) {
+      const e = mkStageEl(q, now); if (!e) continue;
+      const old = stageFind(e.id); if (old) stageExit(old, 'instant', now);
+      stage.els.push(e);
+    }
+    const live = stage.els.filter(e => !e.out);
+    if (live.length > 40) for (const e of live.slice(0, live.length - 40)) stageExit(e, 'fade', now);
+    if (stage.els.some(e => e.born === now && e.appear === 'draw')) sfx.scribble(.5);
+  }
+  if (isTrue(p.stop)) stage.progs = [];
+  const steps = stList(src.steps);
+  const P = steps.length ? stageProgram(steps, src.loop, now) : null;
+  const secs = stNum(p.seconds, 0, 0, 900);
+  stage.life = secs ? now + secs * 1000 : 0;
+  if (p.name && act !== 'remove') stageSave(String(p.name), src);
+  dbg.stage = (dbg.stage || 0) + 1; dbg.lastStage = p;
+  const n = stage.els.filter(e => !e.out).length;
+  return `${act}: ${n} piece${n === 1 ? '' : 's'} on stage${stage.world ? ', world on' : ''}${P ? `, ${P.steps.length} beat${P.steps.length === 1 ? '' : 's'} over ${P.total.toFixed(1)}s${P.loops ? ' looping' : ''}` : ''}${stage.me ? ', your face is placed on the stage' : ''}`;
+}
+function stageClear(how) {
+  const now = performance.now();
+  for (const e of stage.els) stageExit(e, how || 'fade', now);
+  stageWorld(null); stage.progs = []; stage.life = 0; stage.name = ''; stage.standby = false;
+  for (const [k, v] of [['z', 1], ['x', 0], ['y', 0], ['rot', 0]]) stageTween(stage.cam, k, v, how === 'instant' ? 0 : .6, 'smooth', now);
+  stageFreeMe();
+}
+const stageOn = () => stage.els.length > 0 || !!stage.world || !!stage.worldOld || !!stage.me || stage.progs.length > 0;
+
+/* her scene book: whole worlds she named, so she can bring one back (they also fill her standby time) */
+function stageBook() { try { const b = JSON.parse(localStorage.getItem(STAGE_KEY) || '[]'); return Array.isArray(b) ? b : []; } catch (e) { return []; } }
+function stageSave(name, src) {
+  const k = bookKey(name); if (!k) return;
+  const entry = { name: name.slice(0, 32), world: src.world || null, elements: stList(src.elements).slice(0, 40), steps: stList(src.steps).slice(0, 40), loop: src.loop || false, t: Date.now() };
+  if (JSON.stringify(entry).length > 60000) return;
+  const b = stageBook().filter(s => bookKey(s.name) !== k); b.push(entry);
+  try { localStorage.setItem(STAGE_KEY, JSON.stringify(b.slice(-24))); } catch (e) {}
+}
+
+/* taps on pieces she made tappable come back to her */
+function stagePiecePx(e, now) {
+  const K = camOf(e.depth), [px, py] = camPt(e.x * innerWidth / 100, e.y * innerHeight / 100, K);
+  return { x: px, y: py, r: Math.max(22, e.size * minSide() / 100 * K.z * .55) };
+}
+function stageTap(x, y, now) {
+  if (!stage.els.length) return false;
+  for (let i = stage.els.length - 1; i >= 0; i--) {
+    const e = stage.els[i]; if (!e.tap || e.out || e.a < .1 || e.swarm) continue;
+    const P = stagePiecePx(e, now); if (Math.hypot(x - P.x, y - P.y) > P.r) continue;
+    e.punch = 1; bump(.15); sfx.boop(1.2);
+    stage.taps.push(e.id + (e.text ? ` ("${e.text}")` : ''));
+    if (!stage.tapFlush) stage.tapFlush = now + 450;
+    return true;
+  }
+  return false;
+}
+
+function stageTick(now, dt) {
+  if (stage.tapFlush && now > stage.tapFlush) {
+    const t = stage.taps.splice(0); stage.tapFlush = 0;
+    if (t.length) senseTurn(`[scene] They tapped ${t.length > 1 ? 'these on your stage: ' + t.join(', ') : t[0] + ' on your stage'}.`, false, 2500);
+  }
+  if (!stageOn()) return;
+  if (stage.standby && voice.connected) { stage.standby = false; stage.lastCall = now; }   // she woke up inside a world she built
+  // programs
+  for (let k = stage.progs.length - 1; k >= 0; k--) {
+    const P = stage.progs[k], el = (now - P.t0) / 1000;
+    while (P.next < P.steps.length && P.steps[P.next].at <= el) { const S0 = P.steps[P.next++]; stageRunStep(S0.s, S0.dur, P.t0 + S0.at * 1000); }
+    if (P.next >= P.steps.length && el >= P.total) {
+      if (P.loops > 0 && P.total > .2) { P.loops--; P.t0 = now; P.next = 0; }
+      else { stage.progs.splice(k, 1); if (P.total > 2 && !stage.standby) senseNote('[scene] Your animation just finished playing.'); }
+    }
+  }
+  // tweens
+  for (let i = stage.tweens.length - 1; i >= 0; i--) {
+    const t = stage.tweens[i], p = clamp((now - t.t0) / t.dur, 0, 1);
+    t.obj[t.key] = t.from + (t.to - t.from) * t.ease(p);
+    if (p >= 1) { t.obj[t.key] = t.to; stage.tweens.splice(i, 1); }
+  }
+  // shake
+  if (now < stage.shake.until) { const k = (stage.shake.until - now) / 400; stage.shake.x = rnd(-1, 1) * stage.shake.amp * Math.min(1, k); stage.shake.y = rnd(-1, 1) * stage.shake.amp * Math.min(1, k); }
+  else { stage.shake.x = stage.shake.y = 0; stage.shake.amp = 0; }
+  // pieces that finished leaving
+  stage.els = stage.els.filter(e => !e.out || now - e.out < 700);
+  for (const e of stage.els) e.punch *= Math.exp(-dt * 7);
+  if (stage.worldOld && now - stage.worldOld.outT > 700) stage.worldOld = null;
+  // a scene with a lifetime, or one she's left alone a long while, bows out
+  const idleCap = stage.standby ? 0 : 300000;
+  if ((stage.life && now > stage.life) || (idleCap && stage.lastCall && now - stage.lastCall > idleCap && !stage.progs.length)) { stage.life = 0; stage.lastCall = now; stageClear('fade'); }
+}
+
+/* drawing her stage in her glowing line style */
+function stStroke(shape, x, y, sizePx, rot, alpha, upto, flip, solid, sx = 1, sy = 1) {
+  if (alpha < .01 || sizePx < .5) return;
+  const lw = clamp(sizePx * .016, 1.6, 7);
+  for (const [blur, a] of [[6 * DPR, .5], [1.5 * DPR, 1]]) {
+    ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sizePx * sx * (flip ? -1 : 1), sizePx * sy);
+    ctx.globalAlpha = clamp(alpha, 0, 1) * a; ctx.lineWidth = lw / sizePx; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (solid && a === .5) {   // a solid piece blocks out whatever is behind it
+      ctx.globalAlpha = clamp(alpha, 0, 1); ctx.fillStyle = '#000';
+      shape.polys.forEach((P, i) => { if (!shape.closed || !shape.closed[i]) return; ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]); for (let k = 1; k < P.length; k++) ctx.lineTo(P[k][0], P[k][1]); ctx.closePath(); ctx.fill(); });
+      ctx.globalAlpha = clamp(alpha, 0, 1) * a;
+    }
+    ctx.strokeStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = blur;
+    strokePartial(shape.polys, shape.len * clamp(upto, 0, 1));
+    ctx.restore();
+  }
+}
+function stText(t, x, y, px, rot, alpha, chars) {
+  if (alpha < .01) return;
+  const s = chars < t.length ? t.slice(0, Math.max(0, chars)) : t;
+  ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = clamp(alpha, 0, 1);
+  ctx.font = `${Math.round(clamp(px, 8, 900))}px VT323, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = 6 * DPR; ctx.fillText(s, 0, 0); ctx.restore();
+}
+function stageElGeo(e, now) {
+  const still = reduceMQ.matches, age = (now - e.born) / 1000, sp = e.speed;
+  let x = e.x, y = e.y, rot = e.rot, sc = 1 + e.punch * .18, a = e.a;
+  // nothing she makes ever sits dead still
+  if (!still) {
+    y += Math.sin(age * 1.3 + e.ph * 6) * .25; rot += Math.sin(age * 1.1 + e.ph * 3) * .012;
+    const m = e.motion;
+    if (m === 'float') { y += Math.sin(age * 1.6 * sp + e.ph * 6) * 1.6; rot += Math.sin(age * 1.1 * sp) * .04; }
+    else if (m === 'bob') y += Math.sin(age * 4 * sp + e.ph * 6) * .9;
+    else if (m === 'hop') y -= Math.abs(Math.sin(age * 3.4 * sp + e.ph * 6)) * 3;
+    else if (m === 'sway') rot += Math.sin(age * 1.5 * sp + e.ph * 6) * .14;
+    else if (m === 'spin') rot += age * 1.6 * sp;
+    else if (m === 'pulse') sc *= 1 + Math.sin(age * 3 * sp + e.ph * 6) * .08;
+    else if (m === 'flicker') a *= (Math.sin(age * 9 * sp + e.ph * 20) > -.6 || Math.random() < .1) ? 1 : .25;
+    else if (m === 'jitter') { x += rnd(-.35, .35) * sp; y += rnd(-.35, .35) * sp; }
+    else if (m === 'wobble') { rot += Math.sin(age * 6 * sp) * .1; sc *= 1 + Math.sin(age * 5 * sp) * .03; }
+    else if (m === 'drift') { x += Math.sin(age * .37 * sp + e.ph * 6) * 4; y += Math.cos(age * .29 * sp + e.ph * 4) * 3; }
+    else if (m === 'orbit') { x += Math.cos(age * 1.2 * sp + e.ph * 6) * 5; y += Math.sin(age * 1.2 * sp + e.ph * 6) * 3.5; }
+  }
+  // coming on
+  const p = e.drawDur ? clamp((now - e.born) / e.drawDur, 0, 1) : 1;
+  let upto = 1, chars = 999;
+  switch (e.appear) {
+    case 'draw': upto = easeOut(p); break;
+    case 'type': chars = Math.ceil(e.text.length * p); break;
+    case 'pop': sc *= still ? 1 : backOut(p); break;
+    case 'fade': a *= p; break;
+    case 'drop': y -= (1 - ST_EASE.bounce(p)) * (y + e.size * .6 + 10); break;
+    case 'rise': y += (1 - ST_EASE.out(p)) * (110 - y + e.size * .6); break;
+    case 'slide': x += (1 - ST_EASE.spring(p)) * (x < 50 ? -(x + e.size + 10) : (110 - x + e.size)); break;
+    case 'zoom': sc *= 1 + (1 - ST_EASE.out(p)) * 6; a *= p; break;
+    case 'glitch': a *= p >= 1 ? 1 : Math.random() < p ? 1 : .15; if (p < 1 && !still) x += rnd(-1.5, 1.5); break;
+  }
+  // going off
+  if (e.out) {
+    const q = clamp((now - e.out) / (e.exit === 'erase' ? 600 : 420), 0, 1);
+    switch (e.exit) {
+      case 'fade': a *= 1 - q; break;
+      case 'pop': sc *= q < .25 ? 1 + q * .8 : Math.max(0, 1.2 - (q - .25) * 1.6); break;
+      case 'shrink': sc *= 1 - ST_EASE.in(q); break;
+      case 'fall': y += ST_EASE.in(q) * (120 - y + e.size); rot += q * .6; break;
+      case 'fly': y -= ST_EASE.in(q) * (y + e.size + 20); break;
+      case 'glitch': a *= Math.random() < q ? 0 : 1; x += rnd(-2, 2); break;
+      case 'erase': upto = Math.min(upto, 1 - q); break;
+      default: a *= 1 - q;
+    }
+  }
+  return { x, y, rot, sc, a, upto, chars };
+}
+function renderStageEl(e, now) {
+  const G = stageElGeo(e, now); if (G.a < .01) return;
+  const K = camOf(e.depth), ms = minSide();
+  let shape = e.shape;
+  if (e.frames) { const n = e.frames.length, idx = e.frame != null ? ((e.frame % n) + n) % n : Math.floor((now - e.born) / 1000 * e.fps) % n; shape = e.frames[idx]; }
+  if (e.swarm) { renderSwarm(e, shape, G, K, now); return; }
+  const [px, py] = camPt(G.x * innerWidth / 100, G.y * innerHeight / 100, K);
+  const sizePx = e.size * ms / 100 * K.z * G.sc, rot = G.rot + K.rot;
+  if (e.prev && now - e.prevT < 260) stStroke(e.prev, px, py, sizePx, rot, G.a * (1 - (now - e.prevT) / 260), 1, e.flip, e.solid);
+  else e.prev = null;
+  if (shape) stStroke(shape, px, py, sizePx, rot, G.a, e.frames ? 1 : G.upto, e.flip, e.solid);
+  if (e.text) {
+    const fs = shape ? clamp(sizePx * .2, 14, 120) : sizePx;
+    stText(e.text, px, shape ? py + sizePx * .62 + fs * .4 : py, fs, shape ? 0 : rot, G.a, G.chars);
+  }
+}
+function renderSwarm(e, shape, G, K, now) {
+  const W = innerWidth, H = innerHeight, ms = minSide(), still = reduceMQ.matches;
+  const age = (now - e.swarm.t0) / 1000, sp = e.speed, pat = e.swarm.pattern;
+  const FG = pat === 'orbit' ? faceGeo() : null;
+  const many = e.swarm.items.length > 16;
+  for (const it of e.swarm.items) {
+    let x = it.u * 100, y = it.v * 100, rot = it.spin * age * .8, a = G.a, sc = it.s;
+    const t = still ? 0 : age;
+    switch (pat) {
+      case 'fall': y = ((it.v * 120 + t * sp * (16 + it.s * 8)) % 120) - 10; x += Math.sin(t * .9 + it.ph * 9) * 1.5; break;
+      case 'snow': y = ((it.v * 120 + t * sp * 7 * it.s) % 120) - 10; x += Math.sin(t * 1.2 * sp + it.ph * 9) * 4; break;
+      case 'rise': y = 110 - ((it.v * 120 + t * sp * (10 + it.s * 6)) % 120); x += Math.sin(t * 1.1 + it.ph * 9) * 2; break;
+      case 'drift': x = ((it.u * 130 + t * sp * 5 * it.s) % 130) - 15; y += Math.sin(t * .8 + it.ph * 9) * 3; break;
+      case 'stream_right': x = ((it.u * 140 + t * sp * 34 * it.s) % 140) - 20; rot = 0; break;
+      case 'stream_left': x = 120 - ((it.u * 140 + t * sp * 34 * it.s) % 140); rot = 0; break;
+      case 'twinkle': a *= .25 + .75 * Math.max(0, Math.sin(t * 2.2 * sp + it.ph * 30)); rot = 0; break;
+      case 'scatter': y += Math.sin(t * 1.3 + it.ph * 9) * 1.2; break;
+      case 'orbit': { const ang = it.a + t * .9 * sp, r = (58 + it.v * 26) * FG.s; x = (FG.cx + Math.cos(ang) * r) / W * 100; y = (FG.cy + Math.sin(ang) * r * .62) / H * 100; break; }
+      case 'burst': { const life = 1.6 / sp, q = clamp(t / life, 0, 1), d = ST_EASE.out(q) * (18 + it.v * 26); x = G.x + Math.cos(it.a) * d; y = G.y + Math.sin(it.a) * d * (W / H); a *= 1 - q; break; }
+    }
+    const [px, py] = pat === 'orbit' ? [x * W / 100, y * H / 100] : camPt(x * W / 100, y * H / 100, K);
+    const sizePx = e.size * ms / 100 * K.z * sc * G.sc;
+    if (shape) {
+      if (many) { ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(px, py); ctx.rotate(rot + G.rot); ctx.scale(sizePx * (e.flip ? -1 : 1), sizePx); ctx.globalAlpha = clamp(a, 0, 1); ctx.strokeStyle = COL; ctx.shadowColor = COL; ctx.shadowBlur = 3 * DPR; ctx.lineWidth = clamp(sizePx * .05, 1.3, 3) / sizePx; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; strokePartial(shape.polys, shape.len * G.upto); ctx.restore(); }
+      else stStroke(shape, px, py, sizePx, rot + G.rot, a, G.upto, e.flip, false);
+    } else if (e.text) stText(e.text, px, py, sizePx, rot * .2, a, G.chars);
+  }
+}
+function renderWorld(w, now, alpha) {
+  if (!w || alpha < .01) return;
+  const W = innerWidth, H = innerHeight, T = reduceMQ.matches ? 0 : (now - w.t0) / 1000, K = camOf(.7), Kf = camOf(.35), R = w.seed;
+  const hz = w.horizon / 100 * H, skyH = w.ground === 'none' ? H : hz;
+  const line = (pts, a, lw = 1.4, blur = 4) => {
+    ctx.globalAlpha = alpha * a; ctx.lineWidth = lw; ctx.shadowBlur = blur * DPR;
+    ctx.beginPath(); pts.forEach(([x, y], i) => { const [X, Y] = camPt(x, y, K); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.stroke();
+  };
+  ctx.save(); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.strokeStyle = COL; ctx.fillStyle = COL; ctx.shadowColor = COL; ctx.lineCap = 'round';
+  // sky
+  if (w.sky === 'stars' || w.sky === 'dust') {
+    const n = w.sky === 'stars' ? 70 : 46;
+    for (let i = 0; i < n; i++) {
+      const [u, v, ph] = R[i];
+      let x = ((u * W + T * w.scroll * -14 * (.3 + ph)) % W + W) % W, y = v * (w.sky === 'stars' ? skyH : H);
+      if (w.sky === 'dust') { x = ((u * W + T * 6 * (ph - .5) + Math.sin(T * .5 + ph * 9) * 8) % W + W) % W; y = ((v * H - T * 4 * ph) % H + H) % H; }
+      const [X, Y] = camPt(x, y, Kf);
+      ctx.globalAlpha = alpha * (w.sky === 'stars' ? .3 + .6 * Math.max(0, Math.sin(T * (1 + ph * 2) + ph * 40)) : .35);
+      ctx.shadowBlur = 3 * DPR; ctx.beginPath(); ctx.arc(X, Y, w.sky === 'stars' ? .7 + ph * 1.1 : .9, 0, TAU); ctx.fill();
+    }
+  } else if (w.sky === 'grid') {
+    const step = minSide() / 9, off = (T * w.scroll * 12) % step;
+    for (let x = -step + off; x < W + step; x += step) line([[x, 0], [x, skyH]], .12, 1, 2);
+    for (let y = skyH - step * .5; y > -step; y -= step) line([[0, y], [W, y]], .12, 1, 2);
+  } else if (w.sky === 'rays') {
+    const cx = W / 2, n = 14;
+    for (let i = 0; i < n; i++) { const ang = Math.PI + (i + .5) / n * Math.PI + Math.sin(T * .3) * .05; line([[cx + Math.cos(ang) * 40, hz + Math.sin(ang) * 40], [cx + Math.cos(ang) * W, hz + Math.sin(ang) * W]], .16, 1.2, 3); }
+  }
+  // ground
+  if (w.ground !== 'none') line([[-W, hz], [W * 2, hz]], .7, 1.6, 6);
+  if (w.ground === 'grid' || w.ground === 'dots') {
+    const vx = W / 2, rows = 12, depth = H - hz;
+    const off = ((T * w.scroll * .35) % 1 + 1) % 1;
+    for (let i = 0; i < rows; i++) {
+      const k = (i + off) / rows, y = hz + depth * Math.pow(k, 2.2);
+      if (w.ground === 'grid') line([[-W, y], [W * 2, y]], .14 + k * .4, 1.1);
+      else for (let j = -10; j <= 10; j++) { const x = vx + j * (W / 10) * (.2 + k * 1.2), [X, Y] = camPt(x, y, K); ctx.globalAlpha = alpha * (.2 + k * .6); ctx.shadowBlur = 2 * DPR; ctx.beginPath(); ctx.arc(X, Y, .6 + k * 1.6, 0, TAU); ctx.fill(); }
+    }
+    if (w.ground === 'grid') for (let j = -12; j <= 12; j++) line([[vx + j * W / 40, hz], [vx + j * W / 4.5, H + depth]], .26, 1.1);
+  } else if (w.ground === 'waves') {
+    for (let r = 0; r < 6; r++) {
+      const k = (r + 1) / 6, y0 = hz + (H - hz) * Math.pow(k, 1.6) * .95, amp = 2 + k * 7, len = 50 + k * 90, pts = [];
+      for (let x = -40; x <= W + 40; x += 10) pts.push([x, y0 + Math.sin(x / len * TAU + T * (1 + w.scroll * .5) * (1 + r * .2) + r) * amp]);
+      line(pts, .18 + k * .35, 1.2);
+    }
+  } else if (w.ground === 'hills') {
+    for (let r = 0; r < 3; r++) {
+      const pts = [], k = r / 2, base = hz + (H - hz) * (.1 + k * .5), sh = (T * w.scroll * (8 + r * 10)) % W;
+      for (let x = -60; x <= W + 60; x += 12) { const xx = x + sh; pts.push([x, base - (Math.sin(xx / (220 - r * 50) + r * 2) * .5 + .5) * (40 - r * 8) - Math.sin(xx / 61 + r) * 6]); }
+      line(pts, .25 + k * .35, 1.3);
+    }
+  }
+  // weather
+  if (w.weather !== 'none') {
+    const n = Math.round({ rain: 70, snow: 60, wind: 26, embers: 34, bubbles: 22, static: 90, leaves: 18 }[w.weather] * w.amount);
+    for (let i = 0; i < Math.min(n, 160); i++) {
+      const [u, v, ph] = R[i % R.length], wd = w.wind;
+      let x = u * W, y = v * H, a = .5;
+      ctx.shadowBlur = 3 * DPR;
+      if (w.weather === 'rain') {
+        const sp = H * (1.1 + ph * .5); y = ((v * H + T * sp) % (H + 40)) - 20; x = ((u * W + (T * sp) * wd * .35) % W + W) % W;
+        const [X, Y] = camPt(x, y, K); ctx.globalAlpha = alpha * (.25 + ph * .35); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X - wd * 9, Y - 16 - ph * 8); ctx.stroke();
+      } else if (w.weather === 'snow' || w.weather === 'embers' || w.weather === 'bubbles' || w.weather === 'leaves') {
+        const up = w.weather === 'embers' || w.weather === 'bubbles', sp = H * (w.weather === 'snow' ? .06 + ph * .06 : w.weather === 'leaves' ? .08 + ph * .05 : .05 + ph * .08);
+        y = up ? H - ((v * H + T * sp) % (H + 30)) + 15 : ((v * H + T * sp) % (H + 30)) - 15;
+        x = ((u * W + T * (wd * 30 + (w.weather === 'leaves' ? 20 : 0)) + Math.sin(T * (1 + ph) + ph * 30) * 14) % W + W) % W;
+        const [X, Y] = camPt(x, y, K);
+        if (w.weather === 'snow') { ctx.globalAlpha = alpha * (.4 + ph * .5); ctx.beginPath(); ctx.arc(X, Y, 1 + ph * 1.8, 0, TAU); ctx.fill(); }
+        else if (w.weather === 'embers') { ctx.globalAlpha = alpha * (.3 + .6 * Math.abs(Math.sin(T * 3 + ph * 20))); ctx.beginPath(); ctx.arc(X, Y, .8 + ph, 0, TAU); ctx.fill(); }
+        else if (w.weather === 'bubbles') { ctx.globalAlpha = alpha * .45; ctx.lineWidth = 1.1; ctx.beginPath(); ctx.arc(X, Y, 3 + ph * 9, 0, TAU); ctx.stroke(); }
+        else { const s = 5 + ph * 4, r = T * (1 + ph) + ph * 9; ctx.globalAlpha = alpha * .5; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.ellipse(X, Y, s, s * .45, r, 0, TAU); ctx.moveTo(X - Math.cos(r) * s, Y - Math.sin(r) * s); ctx.lineTo(X + Math.cos(r) * s, Y + Math.sin(r) * s); ctx.stroke(); }
+      } else if (w.weather === 'wind') {
+        const sp = W * (.9 + ph * .8), len = 30 + ph * 70; x = ((u * W + T * sp * (wd < 0 ? -1 : 1)) % (W + len * 2) + W + len * 2) % (W + len * 2) - len;
+        const [X, Y] = camPt(x, y, K); ctx.globalAlpha = alpha * (.15 + ph * .3); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(X, Y); ctx.lineTo(X - len * (wd < 0 ? -1 : 1), Y); ctx.stroke();
+      } else if (w.weather === 'static') {
+        if (Math.random() < .5) continue; const [X, Y] = [Math.random() * W, Math.random() * H]; ctx.globalAlpha = alpha * .4; ctx.shadowBlur = 0; ctx.fillRect(X, Y, 1.5 + Math.random() * 3, 1.5);
+      }
+    }
+  }
+  ctx.restore();
+}
+function renderStage(now, layer) {
+  if (!stageOn()) return;
+  ctx = fctx;
+  if (layer === 'back') {
+    if (stage.worldOld) renderWorld(stage.worldOld, now, 1 - clamp((now - stage.worldOld.outT) / 600, 0, 1));
+    if (stage.world) renderWorld(stage.world, now, clamp((now - stage.world.t0) / 600, 0, 1));
+  }
+  for (const e of stage.els) if (e.layer === layer) renderStageEl(e, now);
+}
+/* a hard cut to black she can call for, drawn over everything */
+function renderBlackout(now) {
+  const b = stage.black; if (!b.until) return;
+  let a = 1;
+  if (now > b.until) { if (!b.fadeT) b.fadeT = now; a = 1 - clamp((now - b.fadeT) / 260, 0, 1); if (a <= 0) { b.until = 0; b.fadeT = 0; return; } }
+  mctx.save(); mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.globalAlpha = a; mctx.fillStyle = '#000'; mctx.fillRect(0, 0, cv.width, cv.height); mctx.restore();
+}
+
 /* ================= loop ================= */
 let last = performance.now();
 function frame(now) {
@@ -4563,7 +5118,7 @@ function frame(now) {
   trackEyes(now);
   trackObjects(now);
   autonomyTick(now); needsTick(now); dreamTick(now); roamTick(now, dt); standbyTick(now);
-  danceTick(now); gamesTick(now, dt);
+  danceTick(now); gamesTick(now, dt); stageTick(now, dt);
   update(now, dt); tintTick(now, dt);
   renderFace(now);
   composite(now);
@@ -4605,6 +5160,7 @@ if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
+  stage: stageCall, stageState: () => ({ els: stage.els.map(e => ({ id: e.id, x: +e.x.toFixed(1), y: +e.y.toFixed(1), size: +e.size.toFixed(1), a: +e.a.toFixed(2), out: !!e.out, layer: e.layer })), world: stage.world && { ground: stage.world.ground, sky: stage.world.sky, weather: stage.world.weather }, me: stage.me && { x: +stage.me.x.toFixed(1), y: +stage.me.y.toFixed(1), z: +stage.me.z.toFixed(2) }, cam: Object.assign({}, stage.cam), progs: stage.progs.length, black: stage.black.until > performance.now() }), stageClear,
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
   live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };

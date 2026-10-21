@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Lumi"><link rel="manifest" href="manifest.json"><link rel="icon" href="lumi-icon.png"><link rel="apple-touch-icon" href="lumi-icon.png"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif}[hidden]{display:none!important}</style></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Lumi"><link rel="manifest" href="manifest.json"><link rel="icon" href="lumi-icon.png"><link rel="apple-touch-icon" href="lumi-icon.png"><script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));</script><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif}[hidden]{display:none!important}</style></head><body>
 <title>Lumi Live</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1252,7 +1252,7 @@ function drawStrokes(t) {
   if (v > 0) { ctx.save(); ctx.translate(st.gx * 1.0, st.gy * .7); drawPart(ex, v, now); ctx.restore(); }
 }
 function faceScale() {
-  const r = st.region; return Math.max(.1, S.bare ? Math.min(r.w / 90, r.h / 66) : Math.min(r.w / 112, r.h / 80) * .92);
+  const r = st.region; return Math.max(.1, Math.min(r.w / 112, r.h / 80)) * .92;
 }
 function renderFace(now) {
   const t = now / 1000;
@@ -1384,7 +1384,7 @@ function composite(now) {
 /* ================= behaviour ================= */
 function regionTarget() {
   const W = innerWidth, H = innerHeight;
-  const top = S.bare ? 0 : 50, panelH = S.bare ? 0 : (panelEl.getBoundingClientRect().height || 90) + (S.cc && voice.connected ? 58 : 0);
+  const top = 50, panelH = (panelEl.getBoundingClientRect().height || 90) + (S.cc && voice.connected ? 58 : 0);
   let R = { x: 0, y: top, w: W, h: Math.max(60, H - top - panelH) };
   if (!osdWrap.hidden) {
     const b = osd.getBoundingClientRect();

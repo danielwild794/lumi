@@ -312,7 +312,9 @@ const st = {
   vw: 4.2, vwV: 0, vh: 0, vhV: 0, vr: 0, vrV: 0, visKey: 'rest', nextVis: 0,
   morph: 0, morphV: 0, morphT: 0, morphShape: 'heart', morphUntil: 0, eyeOvr: null, eyeOvrUntil: 0,
   listenLift: 0, thinking: false, headTrack: 0, squish: 1, squishV: 0, squishT: 1, squishHold: false, tiltHead: 0, hide: 0, hideT: 0, touchGaze: null,
-  region: { x: 0, y: 0, w: innerWidth, h: innerHeight }, dregion: null, dTarget: null
+  region: { x: 0, y: 0, w: innerWidth, h: innerHeight }, dregion: null, dTarget: null,
+  // face parts she invents and draws herself; each slot replaces that part of her face for a while
+  cust: { eyeL: null, eyeR: null, browL: null, browR: null, mouth: null, extras: null }
 };
 
 /* combine base mood + blended mood + dials into one target face */
@@ -537,6 +539,12 @@ function drawEye(side, m, t) {
   ctx.translate(side * EX + st.gx * 1.2, EY + st.gy * .9);
   if (st.eye.tilt) ctx.rotate(side * st.eye.tilt);
   const sq = Math.max(.04, (1 - st.closure) * st.eyeScale);
+  { // her own invented eye: blinks, follows you, fades her normal eye out underneath
+    const c = side > 0 ? st.cust.eyeR : st.cust.eyeL, now = performance.now(), v = custVis(c, now);
+    if (v > 0) { ctx.save(); ctx.scale(c.flip ? -1 : 1, Math.max(.08, sq)); drawPart(c, v, now); ctx.restore(); }
+    if (v > .995) { ctx.restore(); return; }
+    ctx.globalAlpha *= 1 - v;
+  }
   if (st.morph > .015) { drawMorphEye(side, sq, clamp(st.morph, 0, 1.08)); ctx.restore(); return; }
   let type = (side > 0 && m.eyeR) ? m.eyeR : m.eye;
   if (st.eyeOvr) type = st.eyeOvr;
@@ -584,8 +592,17 @@ function drawBrow(side, b) {
   const bx = side * 22 + st.gx * 1.0, by = EY - 14.6 + h - st.listenLift + st.gy * .6;
   const xi = bx - side * 7.2, xo = bx + side * 8.2, xp = xi + (xo - xi) * .64;
   const yi = by - ti + .6 * k, yp = by - ti * .3 - (1.4 + ar * .45) * k, yo = by + .7 * k + ti * .2;
+  // her own invented brow still rides her mood: it lifts, drops and tilts like her real one
+  const c = side > 0 ? st.cust.browR : st.cust.browL, now = performance.now(), v = custVis(c, now);
+  if (v > 0) {
+    ctx.save(); ctx.translate(bx + side * .5, by - .4); ctx.rotate(side * Math.atan2(ti * 1.2, 15)); if (c.flip) ctx.scale(-1, 1);
+    drawPart(c, v, now); ctx.restore();
+  }
+  if (v > .995) return;
+  const A = ctx.globalAlpha; ctx.globalAlpha = A * (1 - v);
   const pts = qpts(xi, yi, (xi + xp) / 2, (yi + yp) / 2 - .25 * k, xp, yp, 12).concat(qpts(xp, yp, (xp + xo) / 2, (yp + yo) / 2 - .15 * k, xo, yo, 8).slice(1));
   brush(pts, o => o < .24 ? .4 + 1.15 * smooth(0, .24, o) : .06 + 1.49 * (1 - smooth(.24, 1, o)));
+  ctx.globalAlpha = A;
 }
 
 function drawMouth(m, t) {
@@ -605,6 +622,16 @@ function drawMouth(m, t) {
     brushLoop(top.concat(bot.slice(1, -1)), u => u < f ? .12 + .18 * Math.sin(Math.PI * u / f) : .12 + .26 * Math.sin(Math.PI * (u - f) / (1 - f)));
   };
   const talking = (st.speaking || st.babble) && m.eye !== 'closed';
+  { // her own invented mouth: stays on while she talks and stretches open with her voice
+    const c = st.cust.mouth, now = performance.now(), v = custVis(c, now);
+    if (v > 0) {
+      ctx.save();
+      if (talking) ctx.scale(1 + clamp(st.vw - 4.2, -2, 2.5) * .05, 1 + clamp(st.vh, 0, 6) * .17);
+      drawPart(c, v, now); ctx.restore();
+    }
+    if (v > .995) { ctx.restore(); return; }
+    ctx.globalAlpha *= 1 - v;
+  }
   if (talking) {
     // mouth follows her voice only: shapes per sound, thin open outline, a neutral line between words
     if (st.mouth > .05) {
@@ -725,6 +752,7 @@ function drawEffects(t, now) {
   // the mood's own lasting extra (tears while crying, zzz while asleep)
   const m = st.shown;
   if (m.fx && PERSIST_FX.has(m.fx) && st.morph < .1) drawFxItem(m.fx, t, t, 1);
+  renderDoodleFx(now);
   for (let i = fxList.length - 1; i >= 0; i--) {
     const f = fxList[i], age = (now - f.t0) / 1000, p = (now - f.t0) / f.life;
     if (p >= 1) { fxList.splice(i, 1); continue; }
@@ -827,24 +855,168 @@ function writeBook(b) { try { localStorage.setItem(BOOK_KEY, JSON.stringify(b.sl
 function bookKey(n) { return String(n || '').toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim(); }
 
 let drawing = null, drawingOld = null;
+const KINDS = ['art', 'effect', 'eyes', 'mouth', 'face'];
+
+/* her own effects: any doodle she makes, moving however she picks */
+const dfx = [];
+const PATTERNS = ['rise', 'orbit', 'rain', 'burst', 'pop', 'jitter', 'swirl'];
+function spawnDoodleFx(shape, p, secs) {
+  const now = performance.now();
+  const pattern = PATTERNS.includes(p.pattern) ? p.pattern : 'rise';
+  const count = clamp(Math.round(+p.count || ({ rain: 10, burst: 7, orbit: 4, swirl: 5 }[pattern] || 3)), 1, 14);
+  const size = { small: 6.5, medium: 10, big: 15 }[p.size] || 9;
+  const items = [];
+  for (let i = 0; i < count; i++) {
+    const a = i / count * TAU + rnd(-.3, .3);
+    items.push({ a, ph: Math.random(), x: rnd(-46, 46), y: rnd(-28, 14), spin: rnd(-2, 2), s: rnd(.75, 1.25), delay: pattern === 'rain' ? rnd(0, 1.2) : pattern === 'pop' || pattern === 'jitter' ? i * .12 : 0 });
+  }
+  dfx.push({ shape, pattern, items, t0: now, life: secs * 1000, size });
+  if (dfx.length > 4) dfx.shift();
+}
+function renderDoodleFx(now) {
+  const still = reduceMQ.matches;
+  for (let k = dfx.length - 1; k >= 0; k--) {
+    const f = dfx[k], ageAll = (now - f.t0) / 1000, p = (now - f.t0) / f.life;
+    if (p >= 1) { dfx.splice(k, 1); continue; }
+    const fade = 1 - smooth(.8, 1, p);
+    for (const it of f.items) {
+      const age = Math.max(0, ageAll - it.delay); if (ageAll < it.delay) continue;
+      let x = 0, y = 0, rot = 0, sc = it.s, al = fade;
+      switch (f.pattern) {
+        case 'rise': x = it.x + Math.sin(age * 2 + it.ph * 6) * 3; y = it.y - age * 11; al *= Math.min(1, age * 3) * (1 - smooth(.5, 1, p)); rot = Math.sin(age * 1.5 + it.ph) * .25; break;
+        case 'orbit': { const ang = it.a + age * 1.6; x = Math.cos(ang) * 54; y = Math.sin(ang) * 32 - 4; rot = ang; break; }
+        case 'swirl': { const ang = it.a + age * 2.4, r = 14 + age * 14; x = Math.cos(ang) * r; y = Math.sin(ang) * r * .7 - 4; rot = ang * 2; break; }
+        case 'rain': { const span = 130, yy = ((age * 46 + it.ph * span) % span) - 65; x = it.x * 1.7; y = yy; rot = it.spin * .1; break; }
+        case 'burst': { const d = (1 - Math.exp(-age * 3.2)) * 64; x = Math.cos(it.a) * d; y = Math.sin(it.a) * d * .75 - 4; rot = it.spin * age; sc *= .6 + Math.min(.4, age); break; }
+        case 'pop': { x = it.x; y = it.y - 6; sc *= still ? 1 : backOut(clamp(age / .3, 0, 1)); break; }
+        case 'jitter': { x = it.x + (still ? 0 : rnd(-1.2, 1.2)); y = it.y - 6 + (still ? 0 : rnd(-1.2, 1.2)); break; }
+      }
+      if (still && f.pattern !== 'pop') rot = 0;
+      const sz = f.size * sc;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(sz, sz);
+      ctx.globalAlpha *= clamp(al, 0, 1); ctx.lineWidth = 1.15 / sz; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = COL;
+      strokePartial(f.shape.polys, f.shape.len * easeOut(clamp(age / .35, 0, 1)));
+      ctx.restore();
+    }
+  }
+}
+/* ---- her own faces: eyes, brows, mouth and extras she invents and draws on the spot ----
+   Each part comes in its own 100x100 box centred on where that part sits on her face, so a part
+   drawn small stays small (beady eyes) and one that fills the box is her normal size. Strokes go
+   through her own tapered brush so invented parts look like the rest of her. */
+const PART = { eye: [.36, 1.6], brow: [.2, 1.4], mouth: [.24, 1.05], extras: [1.1, 1.05] };
+function resample(P, step) {
+  const out = [P[0].slice()]; let acc = 0;
+  for (let i = 1; i < P.length && out.length < 420; i++) {
+    const a = P[i - 1], b = P[i], sl = Math.hypot(b[0] - a[0], b[1] - a[1]); if (sl < 1e-6) continue;
+    let pos = 0;
+    while (acc + (sl - pos) >= step && out.length < 420) { pos += step - acc; acc = 0; const f = pos / sl; out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]); }
+    acc += sl - pos;
+  }
+  const last = P[P.length - 1], lo = out[out.length - 1];
+  if (Math.hypot(last[0] - lo[0], last[1] - lo[1]) > step * .3) out.push(last.slice()); else if (out.length > 1) out[out.length - 1] = last.slice();
+  return out;
+}
+function makePart(d, kind) {
+  if (!d || typeof d !== 'string') return null;
+  const [k, w] = PART[kind], polys = parsePath(d), out = []; let len = 0;
+  for (const p of polys) {
+    const q = p.map(([x, y]) => [(clamp(x, -60, 160) - 50) * k, (clamp(y, -60, 160) - 50) * k]);
+    let pts = resample(q, .42), l = 0;
+    for (let i = 1; i < pts.length; i++) l += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (l < .3) { // a dot: give it a tiny loop so it shows
+      pts = [];
+      const [cx, cy] = q[0]; const r = w * .55; for (let i = 0; i <= 12; i++) pts.push([cx + Math.cos(i / 12 * TAU) * r, cy + Math.sin(i / 12 * TAU) * r]); l = TAU * r;
+    }
+    const closed = pts.length > 5 && Math.hypot(q[0][0] - q[q.length - 1][0], q[0][1] - q[q.length - 1][1]) < .6;
+    out.push({ pts, len: l, closed }); len += l;
+  }
+  return out.length ? { polys: out, len, w } : null;
+}
+function custVis(c, now) {
+  if (!c) return 0;
+  const age = now - c.t0; if (age <= 0 || now >= c.until) return 0;
+  return (reduceMQ.matches ? 1 : easeOut(clamp(age / 300, 0, 1))) * (1 - clamp((now - (c.until - 320)) / 320, 0, 1));
+}
+function drawPart(c, vis, now) {
+  const age = (now - c.t0) / 1000, still = reduceMQ.matches;
+  const upto = c.len * (still ? 1 : easeOut(clamp(age / .5, 0, 1)));
+  const pin = still ? 1 : .55 + .45 * backOut(clamp(age / .32, 0, 1));
+  const A = ctx.globalAlpha; ctx.globalAlpha = A * vis;
+  ctx.save(); ctx.scale(pin, pin);
+  const tw = taperMid(c.w, c.w * .2);
+  let used = 0;
+  for (const P of c.polys) {
+    if (used >= upto) break;
+    if (used + P.len <= upto) {
+      if (P.closed) brushLoop(P.pts.slice(0, -1), () => c.w * .78); else brush(P.pts, tw);
+      used += P.len;
+    } else {
+      const n = Math.max(2, Math.round((upto - used) / P.len * (P.pts.length - 1)) + 1);
+      brush(P.pts.slice(0, n), tw); used = upto;
+    }
+  }
+  ctx.restore(); ctx.globalAlpha = A;
+}
+/* put on a face she invented. all=true replaces every part (parts she left out go back to normal) */
+function wearFace(spec, secs, all, mirror) {
+  const now = performance.now(), until = now + secs * 1000, C = st.cust;
+  const eye = makePart(spec.eye, 'eye'), eyeL = makePart(spec.eye_left, 'eye');
+  const brow = makePart(spec.brow, 'brow'), browL = makePart(spec.brow_left, 'brow');
+  const mouth = makePart(spec.mouth, 'mouth'), extras = makePart(spec.extras, 'extras');
+  if (!eye && !eyeL && !brow && !browL && !mouth && !extras) return 0;
+  const slot = (part, delay, flip) => Object.assign({}, part, { t0: now + delay, until: until + delay, flip: !!flip });
+  if (all) for (const k in C) if (C[k]) C[k].until = Math.min(C[k].until, now + 320);
+  // she sketches it on part by part, like she's drawing it live
+  if (eye || eyeL) { C.eyeR = slot(eye || eyeL, 0, false); C.eyeL = slot(eyeL || eye, 60, !eyeL && mirror !== false); blinkNow(); }
+  if (brow || browL) { C.browR = slot(brow || browL, 160, false); C.browL = slot(browL || brow, 210, !browL); }
+  if (mouth) C.mouth = slot(mouth, 280, false);
+  if (extras) C.extras = slot(extras, 380, false);
+  bump(.5); sfx.scribble(.55);
+  return 1;
+}
+function clearFace() { const now = performance.now(); for (const k in st.cust) if (st.cust[k]) st.cust[k].until = Math.min(st.cust[k].until, now + 320); }
+function faceSpec(p) {
+  const s = { eye: p.face_eye, eye_left: p.face_eye_left, brow: p.face_brow, brow_left: p.face_brow_left, mouth: p.face_mouth, extras: p.face_extras };
+  for (const k in s) if (typeof s[k] !== 'string' || !s[k].trim()) delete s[k]; else s[k] = s[k].slice(0, 3000);
+  return Object.keys(s).length ? s : null;
+}
 const SIZE_K = { small: .62, medium: .8, big: .96 };
 function showDrawing(p = {}, local = false) {
   const now = performance.now();
-  if (p.clear === true || p.clear === 'true') { endDrawing(); return 'cleared'; }
+  if (p.clear === true || p.clear === 'true') { endDrawing(); clearFace(); return 'cleared'; }
   let src = null;
   if (p.reuse) {
     const k = bookKey(p.reuse), hit = readBook().find(d => bookKey(d.name) === k) || readBook().find(d => bookKey(d.name).includes(k) && k.length > 2);
-    if (hit) src = { paths: hit.paths, wireframe: hit.wireframe, name: hit.name };
+    if (hit) src = { paths: hit.paths, wireframe: hit.wireframe, name: hit.name, as: hit.as, parts: hit.parts || null, mirror: hit.mirror };
   }
-  if (!src) src = { paths: p.paths, wireframe: p.wireframe, name: p.name || p.label };
+  if (!src) src = { paths: p.paths, wireframe: p.wireframe, name: p.name || p.label, as: p.as, parts: faceSpec(p), mirror: p.mirror };
+  const as = KINDS.includes(p.as) ? p.as : KINDS.includes(src.as) ? src.as : (src.parts && !src.paths && !src.wireframe) ? 'face' : 'art';
+  const secsOf = (def, max) => clamp(isFinite(+p.seconds) && p.seconds !== '' && p.seconds != null ? +p.seconds : def, 1.5, max);
+  const mirror = !(src.mirror === false || src.mirror === 'false');
+  const save = entry => {
+    if (!src.name || p.reuse) return;
+    const book = readBook().filter(d => bookKey(d.name) !== bookKey(src.name));
+    book.push(Object.assign({ name: String(src.name).slice(0, 32), paths: '', wireframe: '', as, t: Date.now() }, entry));
+    writeBook(book);
+  };
+  // her own faces: a whole new face, or just new eyes or a new mouth
+  if (as === 'face' || ((as === 'eyes' || as === 'mouth') && src.paths)) {
+    const spec = as === 'face' ? (src.parts || {}) : as === 'eyes' ? { eye: src.paths } : { mouth: src.paths };
+    if (!wearFace(spec, secsOf(as === 'face' ? 7 : 5, 30), as === 'face', mirror)) return 'nothing to draw';
+    save(as === 'face' ? { parts: spec } : { paths: String(src.paths).slice(0, 4000), mirror });
+    return as;
+  }
   let shape = null, wire = null;
   if (src.wireframe) wire = parseWire(src.wireframe);
   if (!wire && src.paths) { const polys = parsePath(src.paths); if (polys.length) shape = normalize(polys); }
   if (!wire && !shape) return 'nothing to draw';
-  if (src.name && !p.reuse) {
-    const book = readBook().filter(d => bookKey(d.name) !== bookKey(src.name));
-    book.push({ name: String(src.name).slice(0, 32), paths: wire ? '' : String(src.paths).slice(0, 4000), wireframe: wire ? String(src.wireframe).slice(0, 3000) : '', t: Date.now() });
-    writeBook(book);
+  save({ paths: wire ? '' : String(src.paths).slice(0, 4000), wireframe: wire ? String(src.wireframe).slice(0, 3000) : '' });
+  // the same drawing powers make her own effects, not just pictures
+  if (as === 'effect') {
+    if (!shape) return 'needs paths';
+    spawnDoodleFx(shape, p, secsOf(4, 20)); sfx.scribble(.4);
+    return as;
   }
   const where = ['left', 'right', 'above', 'full'].includes(p.where) ? p.where : 'right';
   const motion = ['still', 'float', 'bounce', 'spin', 'wobble', 'shake', 'grow'].includes(p.motion) ? p.motion : (wire ? 'spin' : 'float');
@@ -979,6 +1151,8 @@ function drawStrokes(t) {
   drawMouth(m, t);
   const bl = Math.min(1.2, st.blushA + st.blushBoost);
   if (bl > .02) drawBlush(bl);
+  const ex = st.cust.extras, now = performance.now(), v = custVis(ex, now);
+  if (v > 0) { ctx.save(); ctx.translate(st.gx * 1.0, st.gy * .7); drawPart(ex, v, now); ctx.restore(); }
 }
 function faceScale() {
   const r = st.region; return Math.max(.1, Math.min(r.w / 112, r.h / 80)) * .92;
@@ -1368,7 +1542,8 @@ async function wake() {
         draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
         remember: params => { dbg.remember++; addMemory(params && params.fact); },
         diary: params => { dbg.diary = (dbg.diary || 0) + 1; addDiary(params && params.entry); },
-        game: params => { dbg.game = (dbg.game || 0) + 1; startGame(params || {}); }
+        game: params => { dbg.game = (dbg.game || 0) + 1; startGame(params || {}); },
+        sound: params => { dbg.sound = (dbg.sound || 0) + 1; playSound(params || {}); }
       },
       onAudioAlignment: a => onAlign(a),
       onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
@@ -1431,7 +1606,7 @@ function sendSessionNote() {
   if (diary.length) parts.push('[diary] The last thing you wrote in your diary: ' + diary[diary.length - 1].text);
   if (weatherNow) parts.push('[note] Weather where they are right now: ' + weatherNow + '.');
   const book = readBook();
-  if (book.length) parts.push('[sketchbook] Drawings you made before. Bring one back with draw reuse only if you feel like it; drawing something fresh is always fine too: ' + book.map(b => b.name).join(', '));
+  if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
   try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {}
 }
 function onVoiceEnd(d) {
@@ -1495,7 +1670,9 @@ function guessMood(text) {
 
 /* voice levels each frame: your mic for the meter, her output for the mouth */
 const outBins = { lo: 0, hi: 0 };
+let simVoice = null;   // only for test videos: a fake voice level and mouth shape
 function sampleVoice() {
+  if (simVoice) { voice.outLevel = simVoice.level || 0; voice.outShape = simVoice.shape || 'A'; return; }
   const c = voice.conv; if (!c || !voice.connected) { voice.inLevel *= .9; voice.outLevel *= .8; return; }
   try { voice.inLevel = voice.muted ? 0 : clamp(c.getInputVolume() || 0, 0, 1); } catch (e) {}
   const now = performance.now();
@@ -1809,6 +1986,8 @@ const sfx = (() => {
   }
   return {
     unlock: () => ctxA(),
+    note: (f0, f1, dur, vol, type, delay) => tone(f0, f1, dur, vol, type, delay),
+    hit: (dur, vol, freq, delay) => noise(dur, vol, freq, 1, delay),
     powerOn: () => { tone(55, 38, .35, .09); tone(3200, 9000, .5, .006); noise(.18, .04, 2500); },
     powerOff: () => { tone(1600, 50, .32, .05); noise(.12, .03, 1800); },
     static: () => { if (quietOK()) noise(.28, .05, 3500, .5); },
@@ -2076,6 +2255,33 @@ function wireMemoryUI() {
     setTimeout(() => { if (Date.now() - forgetArmed >= 3400) e.target.textContent = 'FORGET EVERYTHING'; }, 3500);
   });
   renderMemory(); renderBook(); renderDiary();
+}
+
+/* ================= sounds she composes herself ================= */
+const NOTE = { C: 0, 'C#': 1, DB: 1, D: 2, 'D#': 3, EB: 3, E: 4, F: 5, 'F#': 6, GB: 6, G: 7, 'G#': 8, AB: 8, A: 9, 'A#': 10, BB: 10, B: 11 };
+function noteFreq(tok) {
+  const m = /^([A-Ga-g])([#bB]?)(\d)$/.exec(tok); if (!m) return null;
+  const n = NOTE[(m[1] + m[2]).toUpperCase()]; if (n == null) return null;
+  return 440 * Math.pow(2, ((+m[3] + 1) * 12 + n - 69) / 12);
+}
+function playSound(p) {
+  const toks = String(p.notes || '').trim().split(/[\s,]+/).filter(Boolean).slice(0, 40);
+  const wave = ['sine', 'square', 'triangle', 'sawtooth'].includes(p.wave) ? p.wave : 'triangle';
+  const glide = p.glide === true || p.glide === 'true';
+  const parsed = toks.map(tk => { const [n, d] = tk.split(':'); return { n: n.toUpperCase(), f: noteFreq(n), d: clamp(parseFloat(d) || .14, .04, .9) }; });
+  let t = 0;
+  parsed.forEach((x, i) => {
+    if (t > 5) return;
+    if (x.n === '-' || x.n === 'R') { t += x.d; return; }
+    if (x.n === 'N') { sfx.hit(x.d, .05, 2500, t); }
+    else if (x.f) {
+      const nxt = parsed.slice(i + 1).find(y => y.f);
+      sfx.note(x.f, glide && nxt ? nxt.f : x.f, x.d * .95, wave === 'square' || wave === 'sawtooth' ? .025 : .05, wave, t);
+    }
+    const at = t * 1000; setTimeout(() => bump(.22), at);
+    t += x.d;
+  });
+  if (t > .3) spawnFx('music');
 }
 
 /* ================= her mouth, letter by letter ================= */
@@ -2406,7 +2612,7 @@ if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
-  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, diary: addDiary, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type };
+  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type };
 requestAnimationFrame(frame);
 })();
 </script>

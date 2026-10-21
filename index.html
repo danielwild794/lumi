@@ -194,11 +194,19 @@ input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--phos);height:26
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">CAMERA PEEK</span><button id="peekBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">"HEY LUMI" WAKES HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
+        <p class="note" id="wakeNote">While she's asleep, your browser listens for her name. In Chrome that listening goes through Google's speech service. Weather uses your rough location only to look up the forecast; she only gets told the weather.</p>
         <div class="sec">
           <span class="lbl" id="memLbl">WHAT SHE REMEMBERS</span>
           <ul class="mem" id="memList"></ul>
           <button id="memClear" type="button">FORGET EVERYTHING</button>
           <p class="note">She saves these herself while you talk. They stay on this device only.</p>
+        </div>
+        <div class="sec">
+          <span class="lbl" id="diaryLbl">HER DIARY</span>
+          <ul class="mem" id="diaryList"></ul>
+          <p class="note">She writes these herself in quiet moments. You're allowed to read them. She knows.</p>
         </div>
         <div class="sec">
           <span class="lbl" id="bookLbl">HER SKETCHBOOK</span>
@@ -247,7 +255,7 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const KEY = 'lumi-live:v1';
 function readSettings() { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
-const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0 }, readSettings());
+const S = Object.assign({ agentId: AGENT_ID, cc: true, peek: true, react: true, glow: 70, sfx: true, lastSeen: 0, wake: true, weather: true }, readSettings());
 if (typeof S.agentId !== 'string' || !/^agent_[a-z0-9]+$/i.test(S.agentId.trim())) S.agentId = AGENT_ID;
 S.glow = clamp(Math.round(+S.glow || 0), 0, 100);
 
@@ -283,7 +291,7 @@ const SCREENS = ['static', 'glitch', 'flash', 'zoom_in', 'zoom_out', 'channel_fl
 const VIS = {
   A: { w: 5.2, h: 5.2, r: 0 }, E: { w: 6.2, h: 2.4, r: 0 }, I: { w: 5.6, h: 2.8, r: 0 },
   O: { w: 3.6, h: 4.6, r: .8 }, U: { w: 2.6, h: 2.6, r: 1 }, M: { w: 4.4, h: 0, r: 0 },
-  C: { w: 4.6, h: 2, r: .1 }, rest: { w: 4.2, h: 0, r: 0 }
+  C: { w: 4.6, h: 2, r: .1 }, F: { w: 4.8, h: .6, r: 0 }, rest: { w: 4.2, h: 0, r: 0 }
 };
 const BABBLE = ['A', 'E', 'I', 'O', 'U', 'M', 'C', 'C', 'A', 'E', 'O'];
 
@@ -303,13 +311,14 @@ const st = {
   blushA: 0, blushAV: 0, blushBoost: 0,
   vw: 4.2, vwV: 0, vh: 0, vhV: 0, vr: 0, vrV: 0, visKey: 'rest', nextVis: 0,
   morph: 0, morphV: 0, morphT: 0, morphShape: 'heart', morphUntil: 0, eyeOvr: null, eyeOvrUntil: 0,
-  listenLift: 0, thinking: false, headTrack: 0, hide: 0, hideT: 0, touchGaze: null,
+  listenLift: 0, thinking: false, headTrack: 0, squish: 1, squishV: 0, squishT: 1, squishHold: false, tiltHead: 0, hide: 0, hideT: 0, touchGaze: null,
   region: { x: 0, y: 0, w: innerWidth, h: innerHeight }, dregion: null, dTarget: null
 };
 
 /* combine base mood + blended mood + dials into one target face */
-function composeTarget() {
-  const A = st.base, B = st.mix, k = B ? clamp(st.mixK, 0, 1) : 0, D = st.dials;
+function composeTarget() { return buildFace(st.base, st.mix, st.mixK, st.dials); }
+function buildFace(A, B, kIn, D) {
+  const k = B ? clamp(kIn, 0, 1) : 0;
   const dom = k > .5 ? B : A;
   const num = (key, def) => lerp(A[key] ?? def, B ? (B[key] ?? def) : (A[key] ?? def), k);
   const t = {
@@ -988,7 +997,7 @@ function renderFace(now) {
     ctx.save();
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.translate(cx, cy); ctx.scale(s, s);
     ctx.translate(ox, oy); ctx.rotate(st.head);
-    ctx.scale(1 - st.pop * .05, 1 + st.pop * .08);
+    ctx.scale((1 - st.pop * .05) * st.squish, (1 + st.pop * .08) * (1 + (1 - st.squish) * .55));
     ctx.globalAlpha = alpha; ctx.shadowBlur = blur;
     drawStrokes(t);
     if (withFx) { ctx.fillStyle = COL; drawEffects(t, now); drawThinking(t); }
@@ -1140,6 +1149,12 @@ function bump(k = 1) { if (reduceMQ.matches) return; st.hopV -= 30 * k; st.popV 
 function blinkNow() { if (st.blinkStart < 0) st.blinkStart = performance.now(); }
 
 /* overlays are short local reactions (from your face, from her listening); her own face calls clear them */
+function reactMix(a, b, k, dials, ms) {
+  const A = MOOD_BY[a]; if (!A) return;
+  const t = buildFace(A, MOOD_BY[b] || null, k, Object.assign(blankDials(), dials || {}));
+  t.id = 'r:' + t.id + ':' + Math.round(k * 10);
+  st.ovr = { m: t, until: performance.now() + ms };
+}
 function react(moodId, ms, opts = {}) {
   const m = MOOD_BY[moodId]; if (!m) return;
   const t = Object.assign({}, m, { brows: { L: m.brows.L.slice(), R: m.brows.R.slice() } });
@@ -1172,13 +1187,14 @@ function update(now, dt) {
 
   const m = st.shown, T = eyeTargets(m);
   if (still) {
-    Object.assign(st.eye, T); st.eyeScale = st.irisScale = st.mouthScale = 1; st.hop = st.pop = 0; st.head = clamp((m.head || 0) + st.headTrack, -.16, .16); st.blushA = m.blush || 0;
+    Object.assign(st.eye, T); st.eyeScale = st.irisScale = st.mouthScale = 1; st.hop = st.pop = 0; st.head = clamp((m.head || 0) + st.headTrack + st.tiltHead, -.3, .3); st.squish = st.squishHold ? st.squishT : 1; st.blushA = m.blush || 0;
     for (const side of ['L', 'R']) for (let i = 0; i < 3; i++) st.brow[side][i] = m.brows[side][i];
     st.morph = st.morphT;
   } else {
     for (const key in T) { st.eyeV[key] += (170 * (T[key] - st.eye[key]) - 10 * st.eyeV[key]) * dt; st.eye[key] += st.eyeV[key] * dt; }
     for (const side of ['L', 'R']) for (let i = 0; i < 3; i++) { st.browV[side][i] += (200 * (m.brows[side][i] - st.brow[side][i]) - 11 * st.browV[side][i]) * dt; st.brow[side][i] += st.browV[side][i] * dt; }
-    spr(st, 'head', clamp((m.head || 0) + st.headTrack, -.16, .16), 110, 8, dt);
+    spr(st, 'head', clamp((m.head || 0) + st.headTrack + st.tiltHead, -.3, .3), 110, 8, dt);
+    if (st.squishHold) { st.squish = lerp(st.squish, st.squishT, .5); st.squishV = 0; } else spr(st, 'squish', 1, 260, 7, dt);
     spr(st, 'eyeScale', 1, 260, 11, dt); spr(st, 'irisScale', 1, 240, 10, dt); spr(st, 'mouthScale', 1, 240, 14, dt);
     spr(st, 'hop', 0, 200, 10, dt); spr(st, 'pop', 0, 220, 9, dt);
     spr(st, 'blushA', m.blush || 0, 120, 12, dt);
@@ -1193,8 +1209,9 @@ function update(now, dt) {
 
   // her mouth: from her real voice when connected, else babble test
   if (st.speaking) {
-    const a = voice.outLevel, shape = voice.outShape;
-    st.mouthT = a < .06 ? 0 : clamp(a * 1.25, 0, 1);
+    const a = voice.outLevel, useLetters = now - lip.lastAlign < 4000 && lip.vis;
+    const shape = useLetters ? lip.vis : voice.outShape;
+    st.mouthT = a < .06 || shape === 'M' ? 0 : clamp(a * 1.25, 0, 1);
     st.visKey = a < .06 ? 'rest' : shape;
   } else if (st.babble) {
     if (now > st.nextSyl) { st.mouthT = Math.random() < .22 ? 0 : .25 + Math.random() * .75; st.nextSyl = now + 70 + Math.random() * 110; }
@@ -1228,6 +1245,7 @@ function update(now, dt) {
   else if (!drawing) st.dregion = null;
   st.hide += (st.hideT - st.hide) * (1 - Math.exp(-dt * 9));
   idleLife(now);
+  motionTick(now);
 }
 
 /* ================= little bits of life when nothing's happening ================= */
@@ -1329,7 +1347,7 @@ function loadScript(src) {
 }
 async function wake() {
   if (voice.connected || voice.connecting) return;
-  powerOn();
+  powerOn(); askMotion();
   if (ENV.artifact) {
     showToast('She can only talk in the downloaded Lumi Live file, opened in Chrome on your computer. Her face works here.');
     applyFace({ mood: 'shook', screen: 'static' });
@@ -1338,7 +1356,7 @@ async function wake() {
   }
   applyFace({ mood: 'shook', screen: 'static' });
   setTimeout(() => { if (!voice.connected) applyFace({ mood: 'curious' }); }, 900);
-  voice.connecting = true; renderPanel(); setState('WAKING');
+  voice.connecting = true; renderPanel(); setState('WAKING'); stopWakeWord();
   try {
     await loadScript(EL_URL);
     await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
@@ -1348,20 +1366,23 @@ async function wake() {
         face: params => { dbg.face++; dbg.lastFace = params; applyFace(params || {}); },
         look: params => { dbg.look++; doLook(params || {}); },
         draw: params => { dbg.draw++; dbg.lastDraw = params; return showDrawing(params || {}); },
-        remember: params => { dbg.remember++; addMemory(params && params.fact); }
+        remember: params => { dbg.remember++; addMemory(params && params.fact); },
+        diary: params => { dbg.diary = (dbg.diary || 0) + 1; addDiary(params && params.entry); },
+        game: params => { dbg.game = (dbg.game || 0) + 1; startGame(params || {}); }
       },
-      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; setTimeout(sendSessionNote, 400); },
+      onAudioAlignment: a => onAlign(a),
+      onConnect: () => { voice.connected = true; voice.connecting = false; voice.mode = 'listening'; setState('LISTENING'); renderPanel(); applyFace({ mood: 'happy', screen: 'flash' }); keepAwake(true); voice.connectedAt = performance.now(); auto.nextThought = 0; auto.unanswered = 0; fetchWeather().finally(() => setTimeout(sendSessionNote, 200)); stopWakeWord(); },
       onVadScore: ({ vadScore }) => { voice.vad = vadScore; },
       onDisconnect: d => onVoiceEnd(d),
       onError: (msg) => { console.warn('voice error', msg); if (msg) showToast(String(msg).slice(0, 140)); },
       onModeChange: ({ mode }) => {
         if (voice.mode === 'speaking' && mode !== 'speaking') voice.lastSpoke = performance.now();
-        voice.mode = mode; st.speaking = mode === 'speaking';
+        voice.mode = mode; st.speaking = mode === 'speaking'; if (!st.speaking) lipReset();
         if (st.speaking) st.thinking = false;
         setState(st.speaking ? 'TALKING' : (st.thinking ? 'THINKING' : 'LISTENING'));
       },
       onMessage: msg => onVoiceMessage(msg),
-      onInterruption: () => { st.speaking = false; bump(.7); }
+      onInterruption: () => { st.speaking = false; bump(.7); lipReset(); }
     };
     let conv = null;
     try { conv = await window.ElevenLabsClient.Conversation.startSession(Object.assign({ connectionType: 'webrtc' }, opts)); voice.kind = 'webrtc'; }
@@ -1406,6 +1427,9 @@ function sendSessionNote() {
   parts.push(S.lastSeen ? `The last time they woke you was ${ago(Date.now() - S.lastSeen)}.` : 'This is the first time they have ever woken you up.');
   const mem = readMemory();
   if (mem.length) parts.push('[memory] Things you saved about them before: ' + mem.map(m => m.fact).join(' | '));
+  const diary = readDiary();
+  if (diary.length) parts.push('[diary] The last thing you wrote in your diary: ' + diary[diary.length - 1].text);
+  if (weatherNow) parts.push('[note] Weather where they are right now: ' + weatherNow + '.');
   const book = readBook();
   if (book.length) parts.push('[sketchbook] Drawings you made before. Bring one back with draw reuse only if you feel like it; drawing something fresh is always fine too: ' + book.map(b => b.name).join(', '));
   try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {}
@@ -1421,7 +1445,7 @@ function onVoiceEnd(d) {
     if (scr.power === 'on') powerOff();
     if (d.reason === 'error') showToast('Lost the connection to her. Press WAKE to try again.');
   }
-  setTimeout(() => { if (!voice.connected) { st.base = MOOD_BY.sleepy; st.mix = null; st.dials = blankDials(); syncLab(); powerOn(); } }, 2600);
+  setTimeout(() => { if (!voice.connected) { st.base = MOOD_BY.sleepy; st.mix = null; st.dials = blankDials(); syncLab(); powerOn(); startWakeWord(); } }, 2600);
 }
 
 /* captions + a quick mood guess when her brain forgets to set her face */
@@ -1484,7 +1508,7 @@ function sampleVoice() {
     voice.whisperN = whisper ? (voice.whisperN || 0) + 1 : 0;
     if (voice.whisperN === 70 && cooled('whisper', 30000)) { react('curious', 2400, { screen: 'zoom_in' }); senseNote('[ears] they\'re whispering to you'); }
   }
-  if (!st.speaking) { voice.outLevel *= .7; return; }
+  if (!st.speaking) { hearMusic(now, c); voice.outLevel *= .7; return; }
   try {
     const f = c.getOutputByteFrequencyData();
     if (f && f.length) {
@@ -1495,6 +1519,7 @@ function sampleVoice() {
       // a little bounce on her punchy words
       voice.outEma = lerp(voice.outEma || 0, voice.outLevel, .06);
       if (voice.outLevel > .72 && voice.outLevel > voice.outEma + .3 && now - (voice.lastPunch || 0) > 420) { voice.lastPunch = now; bump(.32); }
+      lipTick(now);
       outBins.lo = lo / cut / 255; outBins.hi = hi / (n - cut) / 255;
       const ratio = outBins.hi / (outBins.lo + .001);
       voice.outShape = voice.outLevel > .7 ? 'A' : ratio > .9 ? (voice.outLevel > .4 ? 'E' : 'I') : ratio < .35 ? (voice.outLevel > .35 ? 'O' : 'U') : (voice.outLevel > .45 ? 'A' : 'C');
@@ -1593,8 +1618,10 @@ function trackEyes(now) {
     // she tilts her head when you tilt yours, like a mirror
     const eL = lms[33], eR = lms[263];
     if (eL && eR && reactOn) { const roll = Math.atan2(eR.y - eL.y, eR.x - eL.x); st.headTrack = lerp(st.headTrack, clamp(-roll * .55, -.12, .12), .3); }
-    if (reactOn) {
-      const cats = (res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories) || [];
+    const catsG = (res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories) || [];
+    if (game) gameEyes(now, (blend(catsG, 'eyeBlinkLeft') + blend(catsG, 'eyeBlinkRight')) / 2, true);
+    if (reactOn && !game) {
+      const cats = catsG;
       const smile = (blend(cats, 'mouthSmileLeft') + blend(cats, 'mouthSmileRight')) / 2;
       const jaw = blend(cats, 'jawOpen'), browUp = blend(cats, 'browInnerUp');
       const blinkB = (blend(cats, 'eyeBlinkLeft') + blend(cats, 'eyeBlinkRight')) / 2;
@@ -1604,7 +1631,7 @@ function trackEyes(now) {
       // smile → she smiles back
       cam.smileT = smile > .55 ? cam.smileT + 1 : 0;
       if (cam.smileT === 8 && cooled('smile', 9000)) {
-        if (!['sad', 'crying', 'grumpy'].includes(st.base.id)) react(Math.random() < .5 ? 'happy' : 'wink', 2400);
+        if (!['sad', 'crying', 'grumpy'].includes(st.base.id)) feel('smiled');
         if (cooled('smileNote', 45000)) eyesNote('they just smiled at you');
       }
       // you look down → she gets concerned
@@ -1629,6 +1656,7 @@ function trackEyes(now) {
   } else {
     if (cam.present) { cam.present = false; cam.lostAt = now; }
     st.trackGaze = null; st.headTrack *= .9;
+    if (game) gameEyes(now, 0, false);
     const away = (now - cam.lostAt) / 1000;
     if (reactOn && cam.lostAt) {
       if (away > 2.5 && !cam.wasAway) { cam.wasAway = true; react('curious', 2400); st.tgx = -1; st.nextLook = now + 700; }
@@ -1637,7 +1665,7 @@ function trackEyes(now) {
     }
   }
   // hands: every few frames
-  if (cam.gr && reactOn && now - cam.lastGest > 140) {
+  if (cam.gr && (reactOn || game) && now - cam.lastGest > 140) {
     cam.lastGest = now;
     let g; try { g = cam.gr.recognizeForVideo(cam.video, now); } catch (e) { g = null; }
     const top = g && g.gestures && g.gestures[0] && g.gestures[0][0];
@@ -1645,16 +1673,18 @@ function trackEyes(now) {
     if (wrist) { cam.wrist.push([now, wrist.x]); while (cam.wrist.length && now - cam.wrist[0][0] > 1300) cam.wrist.shift(); } else cam.wrist.length = 0;
     const name = top && top.score > .6 ? top.categoryName : '';
     cam.gestT = name && name === cam.gesture ? cam.gestT + 1 : 0; cam.gesture = name;
+    if (game) gameHand(now, name);
+    if (!reactOn || game) return;
     if (name === 'Open_Palm' && cam.wrist.length > 5) {
       let flips = 0, dir = 0, lo = 1, hi = 0;
       for (let i = 1; i < cam.wrist.length; i++) { const d = cam.wrist[i][1] - cam.wrist[i - 1][1]; const s = Math.sign(d); if (Math.abs(d) > .008) { if (dir && s !== dir) flips++; dir = s; } lo = Math.min(lo, cam.wrist[i][1]); hi = Math.max(hi, cam.wrist[i][1]); }
-      if (flips >= 2 && hi - lo > .05 && cooled('wave', 12000)) { react('happy', 2800, { screen: 'flash', fx: 'sparkles' }); bump(1.2); eyesTurn('they\'re waving at you'); }
+      if (flips >= 2 && hi - lo > .05 && cooled('wave', 12000)) { feel('waved'); eyesTurn('they\'re waving at you'); }
     }
     if (cam.gestT === 3) {
-      if (name === 'Thumb_Up' && cooled('thumbUp', 10000)) { react('starry', 2600, { fx: 'sparkles' }); eyesNote('they gave you a thumbs up'); }
-      else if (name === 'Thumb_Down' && cooled('thumbDown', 10000)) { react('grumpy', 2600, { fx: 'anger' }); eyesNote('they gave you a thumbs down'); }
-      else if (name === 'Victory' && cooled('peace', 10000)) { react('wink', 2400, { fx: 'twinkle' }); eyesNote('they threw up a peace sign'); }
-      else if (name === 'ILoveYou' && cooled('love', 15000)) { react('smitten', 3200); effect('hearts'); st.blushBoost = 1; eyesTurn('they made the love-you hand sign at you'); }
+      if (name === 'Thumb_Up' && cooled('thumbUp', 10000)) { feel('thumbup'); eyesNote('they gave you a thumbs up'); }
+      else if (name === 'Thumb_Down' && cooled('thumbDown', 10000)) { feel('thumbdown'); eyesNote('they gave you a thumbs down'); }
+      else if (name === 'Victory' && cooled('peace', 10000)) { feel('peace'); eyesNote('they threw up a peace sign'); }
+      else if (name === 'ILoveYou' && cooled('love', 15000)) { feel('love'); eyesTurn('they made the love-you hand sign at you'); }
       else if (name === 'Pointing_Up' && cooled('point', 12000)) { react('curious', 2000, { fx: 'question' }); }
     }
   }
@@ -1789,8 +1819,90 @@ const sfx = (() => {
   };
 })();
 
-/* ================= touch: poke, pat, rub, drag, swipe, shake ================= */
-const touch = { down: null, pokes: [], pats: [], longT: 0, motionAsked: false, lastShake: 0, shakeHits: [] };
+/* ================= how she feels: a small inner state that colors every reflex ================= */
+/* Annoyance builds with rude stuff and fades, affection grows with gentle stuff (and is kept between
+   visits), excitement spikes and settles. Every reflex is drawn fresh from that state, so the same poke
+   never plays out the same way twice. Her brain then decides how she *really* feels about it. */
+const heart = { affection: clamp(isFinite(+S.affection) ? +S.affection : .5, 0, 1), annoy: 0, excite: 0, last: performance.now() };
+function heartTick(now) {
+  const dt = Math.min(5, (now - heart.last) / 1000); heart.last = now;
+  heart.annoy = Math.max(0, heart.annoy - dt * .035); heart.excite = Math.max(0, heart.excite - dt * .09);
+}
+const chance = p => Math.random() < p;
+function wpick(list) { const tot = list.reduce((s2, x) => s2 + Math.max(0, x[0]), 0); let r = Math.random() * tot; for (const [w, v] of list) { r -= Math.max(0, w); if (r <= 0) return v; } return list[list.length - 1][1]; }
+const FEEL = {
+  eye:      { d: { annoy: .22, excite: .1 }, pool: H => [[1 + H.annoy * 2, ['grumpy', 'shook']], [1.2 - H.annoy, ['flustered', 'shook']], [.8, ['unimpressed', 'grumpy']], [.6 * H.affection, ['wink', 'flustered']]], fx: ['anger', 'sweat', 'exclaim'], pops: ['HEY!', 'OW', 'RUDE', 'MY EYE', '!!'], popP: .4, blink: true, bump: .6, screen: [['glitch', .15]], say: 'poked you in the eye' },
+  cheek:    { d: { affection: .015, excite: .12 }, pool: H => [[1 + H.affection, ['flustered', 'smitten']], [.8, ['smitten', 'happy']], [.5 + H.annoy * 2, ['unimpressed', 'smug']], [.5, ['shook', 'flustered']]], fx: ['blush', 'blush', 'sweat', 'hearts'], pops: ['EEP', 'HM?', 'BOOP'], popP: .25, squish: true, bump: .4, say: 'poked your cheek' },
+  mouth:    { d: { excite: .15 }, pool: H => [[1, ['shook', 'happy']], [.8, ['curious', 'shook']], [.6, ['smug', 'wink']], [.3 + H.annoy, ['grumpy', 'shook']]], fx: ['exclaim', 'sparkles'], pops: ['BOOP', 'HM!', '?!'], popP: .3, bump: .7, say: 'booped your mouth' },
+  headtap:  { d: { affection: .01 }, pool: H => [[1, ['curious', 'happy']], [.7, ['smug', 'curious']], [.4 + H.annoy, ['unimpressed', 'curious']]], bump: .5, say: 'tapped your head' },
+  pat:      { d: { affection: .05, annoy: -.15 }, pool: H => [[1 + H.affection, ['happy', 'smitten']], [.8, ['smitten', 'sleepy']], [.6, ['happy', 'flustered']], [H.annoy * 2, ['unimpressed', 'happy']]], fx: ['hearts', 'hearts', 'sparkles', 'music'], pops: ['HEHE', 'MORE', 'PURR'], popP: .2, coo: true, blush: .8, dur: 1.4, say: 'patted your head' },
+  rubhead:  { d: { affection: .05, annoy: -.2 }, pool: H => [[1, ['happy', 'sleepy']], [1 + H.affection, ['smitten', 'sleepy']], [.6, ['happy', 'flustered']]], fx: ['hearts', 'music', 'sparkles'], pops: ['MMM', 'PURR', 'HEHE'], popP: .25, coo: true, blush: .8, dur: 1.6, say: 'rubbed your head' },
+  rubcheek: { d: { affection: .04, excite: .1 }, pool: H => [[1, ['flustered', 'smitten']], [.7, ['happy', 'flustered']], [.5, ['sleepy', 'smitten']], [H.annoy * 2, ['grumpy', 'flustered']]], fx: ['blush', 'hearts'], pops: ['EHEHE', 'H-HEY', 'STOP IT'], popP: .3, blush: 1, coo: true, dur: 1.4, say: 'rubbed your cheek' },
+  tickle:   { d: { excite: .3, annoy: .04 }, pool: H => [[1, ['happy', 'flustered']], [.8, ['crying', 'happy']], [.6, ['wink', 'happy']], [H.annoy * 2, ['grumpy', 'happy']]], fx: ['sparkles', 'sweat', 'tears'], pops: ['HAHA', 'STOP', 'HEHE', 'NO-', 'PFFT'], popP: .65, bumps: 5, dur: 1.5, say: 'tickled you' },
+  pet:      { d: { affection: .06, annoy: -.2 }, pool: H => [[1, ['smitten', 'sleepy']], [.8, ['happy', 'smitten']], [.5, ['flustered', 'smitten']]], fx: ['hearts', 'hearts', 'music'], coo: true, blush: 1, dur: 1.6, say: 'rested a finger on your face, kind of petting you' },
+  facetap:  { d: {}, pool: H => [[1, ['curious', 'happy']], [.5, ['shook', 'curious']], [.4, ['smug', 'curious']]], blink: true, bump: .5, say: 'tapped your face' },
+  screen:   { d: {}, pool: H => [[1, ['curious', 'chill']], [.6, ['curious', 'smug']]], dur: .7 },
+  swipe:    { d: { annoy: .08, excite: .1 }, pool: H => [[1, ['dizzy', 'shook']], [.6, ['unimpressed', 'dizzy']], [.6, ['shook', 'grumpy']]], screen: [['glitch', 1]], pops: ['WHOA', 'HEY'], popP: .2, say: 'swiped across your screen' },
+  squish:   { d: { excite: .12 }, pool: H => [[1, ['flustered', 'grumpy']], [.8, ['shook', 'flustered']], [.6, ['unimpressed', 'flustered']], [.4 * H.affection, ['happy', 'flustered']]], pops: ['MMPH', 'HEY', 'SQUISH'], popP: .35, say: 'squished your face with two fingers' },
+  stretch:  { d: { excite: .12 }, pool: H => [[1, ['shook', 'happy']], [.7, ['dizzy', 'shook']], [.5, ['flustered', 'shook']]], pops: ['WHEE', 'AAA', 'STRETCHY'], popP: .35, say: 'stretched your face out with two fingers' },
+  spam:     { d: { annoy: .4 }, pool: H => [[1, ['grumpy', 'unimpressed']], [.6, ['grumpy', 'shook']]], fx: ['anger'], screen: [['glitch', .6]], pops: ['QUIT IT', 'STOP', '>:('], popP: .9, dur: 1.6, say: 'kept poking you over and over' },
+  shake:    { d: { annoy: .15, excite: .2 }, pool: H => [[1, ['dizzy', 'shook']], [.6, ['dizzy', 'grumpy']], [.4, ['dizzy', 'happy']]], eye: 'spiral', screen: [['glitch', 1]], pops: ['WOAAH', 'STOP', '@_@'], popP: .3, dur: 1.4, say: 'shook the phone hard' },
+  swing:    { d: { excite: .2 }, pool: H => [[1, ['shook', 'dizzy']], [.7, ['shook', 'happy']], [.5 + H.annoy, ['grumpy', 'shook']]], screen: [['static', .7]], pops: ['WHOA', 'EEK', 'SLOW DOWN'], popP: .35, say: 'whipped the phone around fast' },
+  spin:     { d: { excite: .2, annoy: .05 }, pool: H => [[1, ['dizzy', 'happy']], [.8, ['dizzy', 'shook']]], eye: 'spiral', pops: ['WHEEE', '@_@', 'NOOO'], popP: .35, dur: 1.4, say: 'spun the phone around' },
+  flip:     { d: { annoy: .1 }, pool: H => [[1, ['dizzy', 'grumpy']], [.7, ['shook', 'dizzy']], [.4, ['dizzy', 'happy']]], pops: ['HELP', 'UPSIDE DOWN', 'BLEH'], popP: .4, dur: 1.6, say: 'flipped the phone upside down' },
+  // things she sees through the camera
+  smiled:   { d: { affection: .01 }, pool: H => [[1, ['happy', 'smug']], [.7, ['wink', 'happy']], [.5 * H.affection, ['smitten', 'happy']], [H.annoy * 2, ['unimpressed', 'happy']]] },
+  waved:    { d: { excite: .15 }, pool: H => [[1, ['happy', 'starry']], [.6, ['wink', 'happy']]], fx: ['sparkles'], screen: [['flash', .6]], bump: 1.1 },
+  thumbup:  { d: { affection: .01 }, pool: H => [[1, ['starry', 'smug']], [.7, ['happy', 'starry']]], fx: ['sparkles'] },
+  thumbdown:{ d: { annoy: .1 }, pool: H => [[1, ['grumpy', 'shook']], [.7, ['unimpressed', 'sad']]], fx: ['anger'] },
+  peace:    { pool: H => [[1, ['wink', 'happy']], [.6, ['smug', 'wink']]], fx: ['twinkle'] },
+  love:     { d: { affection: .05 }, pool: H => [[1, ['smitten', 'flustered']], [.7, ['smitten', 'happy']]], fx: ['hearts'], blush: 1, dur: 1.5 }
+};
+function feel(kind, k = 1) {
+  const F = FEEL[kind]; if (!F) return;
+  const now = performance.now(), H = heart, still = reduceMQ.matches;
+  heartTick(now); poke();
+  for (const key in (F.d || {})) H[key] = clamp(H[key] + F.d[key] * k, 0, 1);
+  if (F.d && F.d.affection) { S.affection = Math.round(H.affection * 1000) / 1000; saveSettings(); }
+  if (st.base.id === 'sleepy' && !voice.connected && kind !== 'screen') { reactMix('shook', 'sleepy', rnd(.2, .6), { open: rnd(.7, 1) }, rnd(500, 900)); sfx.boop(rnd(.7, .9)); return; }
+  const [a, b] = wpick(F.pool(H));
+  const dials = { raise: rnd(-.35, .35), angle: H.annoy > .5 ? -rnd(.2, .7) : rnd(-.3, .4), open: rnd(.85, 1.2), tilt: rnd(-.7, .7) };
+  reactMix(a, b, rnd(.15, .65), dials, rnd(1100, 2500) * (F.dur || 1));
+  if (F.fx && chance(.65)) effect(pick(F.fx));
+  if (F.pops && chance(F.popP || 0)) showPop(pick(F.pops));
+  for (const [sc, pr] of (F.screen || [])) if (chance(pr)) screenCue(sc);
+  if (F.bump) bump(F.bump * rnd(.6, 1.3));
+  if (F.bumps && !still) for (let i = 0; i < F.bumps; i++) setTimeout(() => bump(rnd(.25, .5)), i * rnd(90, 150));
+  if (F.blink) blinkNow();
+  if (F.blush) st.blushBoost = Math.max(st.blushBoost, F.blush * rnd(.6, 1));
+  if (F.squish && !still) st.popV += rnd(10, 22);
+  if (F.eye) { st.eyeOvr = F.eye; st.eyeOvrUntil = now + rnd(1800, 3000); }
+  if (F.coo) sfx.coo(); else if (F.say) sfx.boop(rnd(.85, 1.25));
+  if (F.say) touchLog(kind, F.say);
+}
+
+/* ================= her mind gets the gist, and decides what she really feels ================= */
+const tlog = { items: [], timer: 0, lastTurn: 0 };
+const MAJOR = new Set(['pat', 'rubhead', 'rubcheek', 'tickle', 'pet', 'spam', 'shake', 'swing', 'spin', 'flip', 'squish', 'stretch', 'eye']);
+function touchLog(kind, text) {
+  tlog.items.push({ kind, text, t: performance.now() });
+  clearTimeout(tlog.timer); tlog.timer = setTimeout(flushTouch, 1300);
+}
+function flushTouch() {
+  const items = tlog.items.splice(0); if (!items.length) return;
+  const parts = []; let lastText = '', n = 0;
+  for (const it of items) { if (it.text === lastText) n++; else { if (lastText) parts.push(n > 1 ? `${lastText} (${n === 2 ? 'twice' : n + ' times'})` : lastText); lastText = it.text; n = 1; } }
+  parts.push(n > 1 ? `${lastText} (${n === 2 ? 'twice' : n + ' times'})` : lastText);
+  const mood = heart.annoy > .6 ? 'you\'re pretty fed up right now' : heart.annoy > .3 ? 'you\'re a bit annoyed' : heart.affection > .75 ? 'you\'re feeling soft on them' : '';
+  const text = '[touch] They ' + parts.join(', then ') + '.' + (mood ? ' (Inside, ' + mood + '.)' : '');
+  const big = items.length >= 2 || items.some(i => MAJOR.has(i.kind));
+  const now = performance.now();
+  if (big && voice.connected && now - tlog.lastTurn > 7000) { tlog.lastTurn = now; senseTurn(text + ' Your body already flinched on its own; now react however you actually feel: a face, a few words, or nothing at all with skip_turn.', true); }
+  else senseNote(text);
+}
+
+/* ================= touch: poke, pat, rub, tickle, squish, drag, swipe ================= */
+const touch = { down: null, pokes: [], pats: [], longT: 0, motionAsked: false, lastShake: 0, shakeHits: [], pts: new Map(), pinch: null };
 function faceCoords(px, py) {
   const r = st.region, s = faceScale(), cx = r.x + r.w / 2, cy = r.y + r.h / 2 + r.h * .02;
   return [(px - cx) / s - st.gx * 1.4, (py - cy) / s - st.gy - st.hop];
@@ -1809,77 +1921,120 @@ function gazeAt(px, py) { const r = st.region; return [clamp((px - (r.x + r.w / 
 function askMotion() {
   if (touch.motionAsked) return; touch.motionAsked = true;
   try { if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') DeviceMotionEvent.requestPermission().catch(() => {}); } catch (e) {}
+  try { if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); } catch (e) {}
 }
+const pdist = () => { const v = [...touch.pts.values()]; return Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y); };
 cv.addEventListener('pointerdown', e => {
   askMotion(); sfx.unlock(); poke();
   const now = performance.now();
-  touch.down = { x: e.clientX, y: e.clientY, t: now, moved: 0, lastX: e.clientX, lastY: e.clientY, lastT: now, zone: zoneAt(e.clientX, e.clientY), long: false, rub: 0 };
   try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+  touch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touch.pts.size === 2) {   // two fingers: squish or stretch her face
+    touch.pinch = { d0: Math.max(20, pdist()), min: 1, max: 1 };
+    touch.down = null; clearTimeout(touch.longT); st.squishHold = true; st.squishT = 1;
+    return;
+  }
+  if (touch.pts.size > 2) return;
+  touch.down = { x: e.clientX, y: e.clientY, t: now, moved: 0, lastX: e.clientX, lastY: e.clientY, lastT: now, zone: zoneAt(e.clientX, e.clientY), long: false, rub: 0, flips: [], lastDir: 0, done: false };
   st.touchGaze = gazeAt(e.clientX, e.clientY);
   clearTimeout(touch.longT);
   touch.longT = setTimeout(() => {
     const d = touch.down;
-    if (d && d.moved < 12 && ['face', 'head', 'cheek'].includes(d.zone) && st.base.id !== 'sleepy') {
-      d.long = true; react('smitten', 2600); effect('hearts'); st.blushBoost = 1; sfx.coo();
-      if (cooled('pet', 15000)) senseTurn('[touch] They\'re resting their finger on your face, kind of petting you.');
-    }
+    if (d && d.moved < 12 && ['face', 'head', 'cheek'].includes(d.zone)) { d.done = true; feel('pet'); effect('hearts'); }
   }, 650);
 });
 cv.addEventListener('pointermove', e => {
+  if (touch.pts.has(e.pointerId)) touch.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touch.pinch && touch.pts.size >= 2) {
+    const f = clamp(pdist() / touch.pinch.d0, .55, 1.6);
+    st.squishT = f; touch.pinch.min = Math.min(touch.pinch.min, f); touch.pinch.max = Math.max(touch.pinch.max, f);
+    return;
+  }
   const d = touch.down; if (!d) return;
   const now = performance.now(), dx = e.clientX - d.lastX, dy = e.clientY - d.lastY;
   d.moved += Math.hypot(dx, dy); d.lastX = e.clientX; d.lastY = e.clientY; d.lastT = now;
   st.touchGaze = gazeAt(e.clientX, e.clientY);
-  if (d.zone === 'head' && zoneAt(e.clientX, e.clientY) === 'head' && st.base.id !== 'sleepy') {
-    d.rub += Math.abs(dx);
-    if (d.rub > 260 && !d.rubbed) { d.rubbed = true; clearTimeout(touch.longT); react('happy', 2600); effect('hearts'); st.blushBoost = 1; sfx.coo(); if (cooled('headpat', 12000)) senseTurn('[touch] They\'re rubbing your head.'); }
+  if (d.done) return;
+  const z = zoneAt(e.clientX, e.clientY);
+  // tickle: quick back-and-forth scribbles on her face
+  if (z !== 'screen' && Math.abs(dx) > 3) {
+    const dir = Math.sign(dx);
+    if (d.lastDir && dir !== d.lastDir) { d.flips.push(now); d.flips = d.flips.filter(t => now - t < 900); }
+    d.lastDir = dir;
+    if (d.flips.length >= 6 && d.moved > 160) { d.done = true; clearTimeout(touch.longT); feel('tickle'); return; }
   }
+  // slower rubs
+  if (d.zone === 'head' && z === 'head') { d.rub += Math.abs(dx); if (d.rub > 260) { d.done = true; clearTimeout(touch.longT); feel('rubhead'); } }
+  else if (d.zone === 'cheek' && z === 'cheek') { d.rub += Math.hypot(dx, dy); if (d.rub > 180) { d.done = true; clearTimeout(touch.longT); feel('rubcheek'); } }
 });
 function endTouch(e) {
-  const d = touch.down; touch.down = null; clearTimeout(touch.longT);
-  setTimeout(() => { if (!touch.down) st.touchGaze = null; }, 700);
-  if (!d || d.long || d.rubbed) return;
-  const now = performance.now(), dur = now - d.t, dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
-  if (dist > 120 && dist / Math.max(dur, 1) > 1.1) {
-    screenCue('glitch'); react('dizzy', 1400);
-    if (cooled('swipe', 10000)) senseNote('[touch] they swiped across your screen and scrambled you for a second');
+  touch.pts.delete(e.pointerId);
+  if (touch.pinch) {
+    if (touch.pts.size < 2) {
+      const P = touch.pinch; touch.pinch = null; st.squishHold = false;
+      if (!reduceMQ.matches) st.squishV = (st.squish < 1 ? 1 : -1) * 6;   // boing back
+      if (P.min < .85) feel('squish'); else if (P.max > 1.18) feel('stretch');
+    }
     return;
   }
+  const d = touch.down; touch.down = null; clearTimeout(touch.longT);
+  setTimeout(() => { if (!touch.down) st.touchGaze = null; }, 700);
+  if (!d || d.done) return;
+  const now = performance.now(), dur = now - d.t, dist = Math.hypot(e.clientX - d.x, e.clientY - d.y);
+  if (dist > 120 && dist / Math.max(dur, 1) > 1.1) { feel('swipe'); return; }
   if (dist > 14 || dur > 600) return;
   tap(d.zone, e.clientX, e.clientY, now);
 }
 cv.addEventListener('pointerup', endTouch);
-cv.addEventListener('pointercancel', () => { touch.down = null; clearTimeout(touch.longT); st.touchGaze = null; });
+cv.addEventListener('pointercancel', e => { touch.pts.delete(e.pointerId); touch.down = null; touch.pinch = null; st.squishHold = false; clearTimeout(touch.longT); st.touchGaze = null; });
 function tap(zone, px, py, now) {
-  touch.pokes = touch.pokes.filter(t => now - t < 3000); touch.pokes.push(now);
-  if (st.base.id === 'sleepy' && !voice.connected && zone !== 'screen') { react('shook', 700, { screen: 'static' }); sfx.boop(.8); return; }
-  if (touch.pokes.length >= 6 && cooled('pokespam', 15000)) {
-    touch.pokes = []; react('grumpy', 2800, { fx: 'anger', screen: 'glitch' }); showPop('QUIT IT'); sfx.boop(.6);
-    senseTurn('[touch] They keep poking your screen over and over.'); return;
-  }
-  sfx.boop(1);
-  if (zone === 'eye') { blinkNow(); react('flustered', 900); bump(.6); if (Math.random() < .35) showPop('HEY!'); if (cooled('eyepoke', 8000)) senseNote('[touch] they poked you right in the eye'); }
-  else if (zone === 'cheek') { st.popV += 18; st.blushBoost = 1; react(Math.random() < .5 ? 'flustered' : 'smitten', 1600); if (cooled('cheek', 8000)) senseNote('[touch] they poked your cheek'); }
-  else if (zone === 'mouth') { react('shook', 900); bump(.7); if (cooled('mouth', 8000)) senseNote('[touch] they booped you on the mouth'); }
+  touch.pokes = touch.pokes.filter(t => now - t < 3000); if (zone !== 'screen') touch.pokes.push(now);
+  if (touch.pokes.length >= 6 && cooled('pokespam', 12000)) { touch.pokes = []; feel('spam'); return; }
+  if (zone === 'eye') feel('eye');
+  else if (zone === 'cheek') feel('cheek');
+  else if (zone === 'mouth') feel('mouth');
   else if (zone === 'head') {
     touch.pats = touch.pats.filter(t => now - t < 1800); touch.pats.push(now);
-    if (touch.pats.length >= 3) { touch.pats = []; react('happy', 2600); effect('hearts'); st.blushBoost = .8; sfx.coo(); if (cooled('headpat', 12000)) senseTurn('[touch] They\'re patting your head.'); }
-    else { bump(.5); react('curious', 900); }
+    if (touch.pats.length >= 3) { touch.pats = []; feel('pat'); } else feel('headtap');
   }
-  else if (zone === 'face') { bump(.5); blinkNow(); }
-  else { const g = gazeAt(px, py); st.tgx = g[0]; st.tgy = g[1]; st.nextLook = now + 1500; react('curious', 1100); }
+  else if (zone === 'face') feel('facetap');
+  else { const g = gazeAt(px, py); st.tgx = g[0]; st.tgy = g[1]; st.nextLook = now + 1500; feel('screen'); }
 }
+
+/* ================= phone movement: shake, swing, spin, tilt, flip ================= */
+const motion = { swingAt: 0, spinAt: 0, flipSince: 0, flipped: false, beta: null, gamma: null, t: 0 };
 addEventListener('devicemotion', e => {
-  const a = e.acceleration; if (!a || a.x == null) return;
-  const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0), now = performance.now();
-  if (m < 16) return;
-  touch.shakeHits = touch.shakeHits.filter(t => now - t < 700); touch.shakeHits.push(now);
-  if (touch.shakeHits.length >= 3 && now - touch.lastShake > 4000) {
-    touch.lastShake = now; touch.shakeHits = []; poke();
-    st.eyeOvr = 'spiral'; st.eyeOvrUntil = now + 2600; react('dizzy', 2600); screenCue('glitch');
-    if (cooled('shake', 15000)) senseTurn('[touch] They just shook their phone hard and made you dizzy.');
+  const a = e.acceleration, r = e.rotationRate, now = performance.now();
+  if (a && a.x != null) {
+    const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+    if (m > 16) {
+      touch.shakeHits = touch.shakeHits.filter(t => now - t < 700); touch.shakeHits.push(now);
+      if (touch.shakeHits.length >= 3 && now - touch.lastShake > 4000) { touch.lastShake = now; touch.shakeHits = []; feel('shake'); return; }
+    }
+    // one big jolt that isn't a shake: a swing
+    if (m > 12 && now - motion.swingAt > 5000 && now - touch.lastShake > 3000) {
+      motion.swingAt = now;
+      setTimeout(() => { if (performance.now() - touch.lastShake > 1500) feel('swing'); }, 750);
+    }
+  }
+  if (r && r.alpha != null) {
+    const w = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0);
+    if (w > 420 && now - motion.spinAt > 6000 && now - touch.lastShake > 2000) { motion.spinAt = now; feel('spin'); }
   }
 });
+addEventListener('deviceorientation', e => { if (e.beta == null) return; motion.beta = e.beta; motion.gamma = e.gamma; motion.t = performance.now(); });
+function motionTick(now) {
+  if (motion.beta == null || now - motion.t > 1500) { st.tiltHead *= .9; return; }
+  const portrait = (screen.orientation && screen.orientation.type || 'portrait').startsWith('portrait');
+  const side = portrait ? motion.gamma : motion.beta;
+  // like a bubble level: she leans to stay upright and her eyes drift downhill
+  const lean = clamp(-(side || 0) * Math.PI / 180 * .45, -.28, .28);
+  st.tiltHead = lerp(st.tiltHead, Math.abs(side) > 8 ? lean : 0, .12);
+  if (Math.abs(side) > 25 && !st.touchGaze && !st.trackGaze) { st.tgx = clamp(side / 45, -1, 1); st.nextLook = now + 400; }
+  const upside = portrait ? motion.beta < -40 : false;
+  if (upside) { if (!motion.flipSince) motion.flipSince = now; if (!motion.flipped && now - motion.flipSince > 900) { motion.flipped = true; feel('flip'); } }
+  else { motion.flipSince = 0; motion.flipped = false; }
+}
 
 /* ================= what she remembers about you (this device only) ================= */
 const MEM_KEY = 'lumi-live:memory';
@@ -1920,7 +2075,210 @@ function wireMemoryUI() {
     forgetArmed = Date.now(); e.target.textContent = 'TAP AGAIN TO FORGET';
     setTimeout(() => { if (Date.now() - forgetArmed >= 3400) e.target.textContent = 'FORGET EVERYTHING'; }, 3500);
   });
-  renderMemory(); renderBook();
+  renderMemory(); renderBook(); renderDiary();
+}
+
+/* ================= her mouth, letter by letter ================= */
+/* ElevenLabs sends the timing of every letter she speaks. The page lines those letters up with her
+   audio as it plays, so her mouth makes the right shape; how wide it opens still follows her loudness. */
+const lip = { q: [], cur: null, idx: 0, lastAlign: 0, vis: '', silentSince: 0 };
+function onAlign(a) {
+  if (!a || !a.chars || !a.chars.length) return;
+  const n = a.chars.length, st0 = a.char_start_times_ms || [], du = a.char_durations_ms || [];
+  lip.lastAlign = performance.now();
+  lip.q.push({ chars: a.chars, st: st0, du, total: (st0[n - 1] || 0) + (du[n - 1] || 0), t0: 0 });
+  if (lip.q.length > 60) lip.q.shift();
+}
+function lipReset() { lip.q = []; lip.cur = null; lip.vis = ''; }
+function charVis(c) {
+  c = String(c || '').toLowerCase();
+  if (c === 'a') return 'A'; if (c === 'e') return 'E'; if (c === 'i' || c === 'y') return 'I';
+  if (c === 'o') return 'O'; if (c === 'u' || c === 'w') return 'U';
+  if (c === 'm' || c === 'b' || c === 'p') return 'M'; if (c === 'f' || c === 'v') return 'F';
+  return /[a-z]/.test(c) ? 'C' : 'rest';
+}
+function lipTick(now) {
+  const audible = voice.outLevel > .05;
+  if (!audible) { if (!lip.silentSince) lip.silentSince = now; if (now - lip.silentSince > 450) lip.cur = null; }
+  else lip.silentSince = 0;
+  if (!lip.cur && audible && lip.q.length) { lip.cur = lip.q.shift(); lip.cur.t0 = now - 20; lip.idx = 0; }
+  while (lip.cur && now - lip.cur.t0 > lip.cur.total) {
+    const nxt = lip.q.shift();
+    if (!nxt) { lip.cur = null; break; }
+    nxt.t0 = lip.cur.t0 + lip.cur.total; lip.cur = nxt; lip.idx = 0;
+  }
+  if (!lip.cur) { lip.vis = ''; return; }
+  const el = now - lip.cur.t0, C = lip.cur;
+  while (lip.idx < C.chars.length - 1 && el > C.st[lip.idx] + C.du[lip.idx]) lip.idx++;
+  lip.vis = charVis(C.chars[lip.idx]);
+}
+
+/* ================= she hears music ================= */
+/* Music has a steady pulse in the low end. The page watches for bass hits on your mic, and if they
+   land at a regular tempo for a few seconds, she knows something's playing and bobs along. */
+const music = { prev: 0, mean: 0, vari: 0, onsets: [], lastOnset: 0, on: false, bpm: 0, beatMs: 0, nextBeat: 0, offSince: 0, levels: [] };
+function hearMusic(now, c) {
+  let f; try { f = c.getInputByteFrequencyData(); } catch (e) { return; }
+  if (!f || !f.length) return;
+  const nb = Math.max(4, Math.floor(f.length * .04));
+  let bass = 0; for (let i = 0; i < nb; i++) bass += f[i]; bass /= nb * 255;
+  const flux = Math.max(0, bass - music.prev); music.prev = bass;
+  music.mean = lerp(music.mean, flux, .05); music.vari = lerp(music.vari, (flux - music.mean) ** 2, .05);
+  if (flux > music.mean + 1.6 * Math.sqrt(music.vari) && flux > .02 && now - music.lastOnset > 260) { music.lastOnset = now; music.onsets.push(now); }
+  while (music.onsets.length && now - music.onsets[0] > 8000) music.onsets.shift();
+  music.levels.push(voice.inLevel > .03 ? 1 : 0); if (music.levels.length > 360) music.levels.shift();
+  let steady = false, med = 0;
+  if (music.onsets.length >= 8) {
+    const iv = []; for (let i = 1; i < music.onsets.length; i++) iv.push(music.onsets[i] - music.onsets[i - 1]);
+    const srt = iv.slice().sort((a, b) => a - b); med = srt[Math.floor(srt.length / 2)];
+    const fit = iv.filter(x => { const r = x / med; return Math.abs(r - Math.round(r)) < .14 && Math.round(r) >= 1 && Math.round(r) <= 2; }).length / iv.length;
+    const filled = music.levels.reduce((a, b) => a + b, 0) / music.levels.length;
+    steady = fit > .65 && med > 330 && med < 860 && filled > .85;
+  }
+  if (steady) {
+    music.offSince = 0; music.beatMs = med; music.bpm = Math.round(60000 / med);
+    if (!music.on) {
+      music.on = true; music.nextBeat = music.lastOnset + med;
+      react('happy', 2200, { fx: 'music' });
+      if (cooled('music', 180000)) {
+        const feel = music.bpm > 140 ? 'fast and hype' : music.bpm > 110 ? 'upbeat' : music.bpm > 90 ? 'groovy, mid-tempo' : 'slow and chill';
+        senseTurn(`[ears] there's music playing near them now, it sounds ${feel}`);
+      }
+    }
+  } else if (music.on) {
+    if (!music.offSince) music.offSince = now;
+    if (now - music.offSince > 6000) music.on = false;
+  }
+  if (music.on && !st.speaking && now >= music.nextBeat) {
+    music.nextBeat = Math.max(now, music.lastOnset) + music.beatMs; bump(.22);
+    if (Math.random() < .12) spawnFx('music');
+  }
+}
+
+/* ================= her diary (this device only) ================= */
+const DIARY_KEY = 'lumi-live:diary';
+function readDiary() { try { const d = JSON.parse(localStorage.getItem(DIARY_KEY) || '[]'); return Array.isArray(d) ? d : []; } catch (e) { return []; } }
+function writeDiary(d) { try { localStorage.setItem(DIARY_KEY, JSON.stringify(d.slice(-120))); } catch (e) {} renderDiary(); }
+function addDiary(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 600); if (!t) return;
+  const d = readDiary(); d.push({ text: t, t: Date.now() }); writeDiary(d);
+}
+function renderDiary() {
+  const ul = $('#diaryList'); if (!ul) return; ul.textContent = '';
+  const d = readDiary();
+  $('#diaryLbl').textContent = 'HER DIARY (' + d.length + ')';
+  if (!d.length) ul.append(emptyRow('No entries yet.'));
+  d.slice().reverse().slice(0, 40).forEach(e => {
+    const when = new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    ul.append(listRow(when.toUpperCase() + ' ▸ ' + e.text, null, () => writeDiary(readDiary().filter(x => x.t !== e.t)), 'Delete this entry'));
+  });
+}
+
+/* ================= games ================= */
+let game = null;
+const RPS = { Closed_Fist: 'rock', Open_Palm: 'paper', Victory: 'scissors' };
+function gameTurn(text) { senseTurn('[game] ' + text, true); }
+function startGame(p) {
+  const type = String(p.type || '').toLowerCase();
+  if (game) return;
+  if (!cam.on || !cam.lm) { gameTurn('You can\'t play that right now: their camera is off, so you can\'t see them. Ask them to open your eyes first.'); return; }
+  const now = performance.now();
+  if (type === 'rock_paper_scissors') {
+    if (!cam.gr) { gameTurn('Your hand tracking isn\'t ready yet, so you can\'t play rock paper scissors this second.'); return; }
+    game = { type: 'rps', t0: now, votes: {}, her: pick(['rock', 'paper', 'scissors']) };
+    applyFace({ mood: 'smug' });
+    const words = ['ROCK', 'PAPER', 'SCISSORS', 'SHOOT!'];
+    words.forEach((w, i) => setTimeout(() => { if (game && game.type === 'rps') { showPop(w); bump(.6); } }, 300 + i * 650));
+    setTimeout(() => finishRPS(), 300 + 3 * 650 + 900);
+  } else if (type === 'staring_contest') {
+    game = { type: 'stare', t0: now, start: now + 2600, herBlinkAt: now + 2600 + rnd(14000, 50000), lostAt: 0 };
+    ['3', '2', '1', 'STARE'].forEach((w, i) => setTimeout(() => { if (game && game.type === 'stare') { showPop(w); bump(.4); } }, i * 650));
+    applyFace({ mood: 'chill', eye_open: 1.3, brow_raise: .4 });
+  }
+}
+function gameHand(now, name) {
+  if (!game || game.type !== 'rps') return;
+  const shootAt = game.t0 + 300 + 3 * 650;
+  if (now >= shootAt - 150 && now <= shootAt + 900 && RPS[name]) game.votes[RPS[name]] = (game.votes[RPS[name]] || 0) + 1;
+}
+function finishRPS() {
+  if (!game || game.type !== 'rps') return;
+  const g = game; game = null;
+  const theirs = Object.keys(g.votes).sort((a, b) => g.votes[b] - g.votes[a])[0];
+  showPop(g.her.toUpperCase() + '!');
+  if (!theirs) { applyFace({ mood: 'unimpressed' }); gameTurn(`Rock paper scissors: you threw ${g.her}, but you couldn't see their hand at "shoot", so the round doesn't count.`); return; }
+  const beats = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+  const result = theirs === g.her ? 'tie' : beats[g.her] === theirs ? 'won' : 'lost';
+  setTimeout(() => {
+    if (result === 'won') applyFace({ mood: 'smug', effect: 'sparkles' });
+    else if (result === 'lost') applyFace({ mood: 'shook', blend_with: 'grumpy', blend: .4, screen: 'static' });
+    else applyFace({ mood: 'curious' });
+  }, 500);
+  gameTurn(`Rock paper scissors: they threw ${theirs}, you threw ${g.her}. ${result === 'tie' ? 'It\'s a tie.' : 'You ' + result + '.'}`);
+}
+function gameEyes(now, blink, present) {
+  if (!game || game.type !== 'stare' || now < game.start) return;
+  st.nextBlink = now + 5000; st.blinkStart = -1;
+  const secs = Math.round((now - game.start) / 1000);
+  if (!present) { if (!game.lostAt) game.lostAt = now; if (now - game.lostAt > 1800) endStare(now, 'looked away', secs); return; }
+  game.lostAt = 0;
+  if (blink > .55) { endStare(now, 'they blinked', secs); return; }
+  if (now > game.herBlinkAt) endStare(now, 'you blinked', secs);
+}
+function endStare(now, how, secs) {
+  game = null;
+  if (how === 'you blinked') {
+    st.blinkStart = now; showPop('NOOO'); setTimeout(() => applyFace({ mood: 'crying', screen: 'glitch' }), 300);
+    gameTurn(`Staring contest: you blinked first after ${secs} seconds. You lost.`);
+  } else {
+    showPop(how === 'looked away' ? 'LOOKED AWAY!' : 'BLINKED!');
+    applyFace({ mood: 'smug', effect: 'sparkles' });
+    gameTurn(`Staring contest: ${how === 'looked away' ? 'they looked away' : 'they blinked'} first after ${secs} seconds. You won.`);
+  }
+}
+
+/* ================= "hey Lumi" ================= */
+const ww = { rec: null, want: false, starts: [] };
+function startWakeWord() {
+  if (ENV.artifact || !S.wake || voice.connected || voice.connecting) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { $('#wakeNote').textContent = 'This browser can\'t listen for her name. Chrome on Android or desktop can, so can Safari on iPhone.'; return; }
+  if (ww.rec) return;
+  const now = Date.now(); ww.starts = ww.starts.filter(t => now - t < 60000);
+  if (ww.starts.length > 8) { setTimeout(startWakeWord, 20000); return; }   // don't spin if the browser keeps stopping it
+  ww.starts.push(now); ww.want = true;
+  let r; try { r = new SR(); } catch (e) { return; }
+  r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+  r.onresult = e => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = (e.results[i][0] && e.results[i][0].transcript || '').toLowerCase();
+      if (/\b(lu+m(i|ie|y|ee)|loo ?m(i|e|y|ee)|lou ?me|lumie)\b/.test(t)) { stopWakeWord(); react('shook', 600, { screen: 'static' }); setTimeout(wake, 300); return; }
+    }
+  };
+  r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { ww.want = false; $('#wakeNote').textContent = 'Allow the microphone for this site so she can hear her name while she sleeps.'; } };
+  r.onend = () => { ww.rec = null; if (ww.want && S.wake && !voice.connected && !voice.connecting) setTimeout(startWakeWord, 500); };
+  try { r.start(); ww.rec = r; if (!voice.connected) setState('SAY "HEY LUMI"'); } catch (e) { ww.rec = null; }
+}
+function stopWakeWord() { ww.want = false; if (ww.rec) { try { ww.rec.abort(); } catch (e) {} ww.rec = null; } }
+
+/* ================= weather ================= */
+let weatherNow = '', weatherAt = 0;
+const WMO = { 0: 'clear sky', 1: 'mostly clear', 2: 'partly cloudy', 3: 'overcast', 45: 'foggy', 48: 'freezing fog', 51: 'light drizzle', 53: 'drizzle', 55: 'heavy drizzle', 56: 'freezing drizzle', 57: 'freezing drizzle', 61: 'light rain', 63: 'rain', 65: 'heavy rain', 66: 'freezing rain', 67: 'freezing rain', 71: 'light snow', 73: 'snow', 75: 'heavy snow', 77: 'snow grains', 80: 'rain showers', 81: 'rain showers', 82: 'violent rain showers', 85: 'snow showers', 86: 'heavy snow showers', 95: 'a thunderstorm', 96: 'a thunderstorm with hail', 99: 'a big thunderstorm with hail' };
+function fetchWeather() {
+  if (!S.weather || ENV.artifact || !navigator.geolocation) return Promise.resolve();
+  if (weatherNow && Date.now() - weatherAt < 20 * 60000) return Promise.resolve();
+  const go = new Promise(res => {
+    navigator.geolocation.getCurrentPosition(async pos => {
+      try {
+        const la = pos.coords.latitude.toFixed(2), lo = pos.coords.longitude.toFixed(2);
+        const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current=temperature_2m,apparent_temperature,weather_code,is_day,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph`);
+        const j = await r.json(), c = j && j.current;
+        if (c) { weatherNow = `${WMO[c.weather_code] || 'unclear skies'}, ${Math.round(c.temperature_2m)}°F (feels like ${Math.round(c.apparent_temperature)}°F), ${c.is_day ? 'daytime' : 'dark out'}, wind ${Math.round(c.wind_speed_10m)} mph`; weatherAt = Date.now(); }
+      } catch (e) {}
+      res();
+    }, () => res(), { maximumAge: 30 * 60000, timeout: 7000, enableHighAccuracy: false });
+  });
+  return Promise.race([go, new Promise(r => setTimeout(r, 6000))]);
 }
 
 /* ================= UI ================= */
@@ -1995,6 +2353,8 @@ toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTim
 toggleRow('peekBtn', 'peek', () => { $('#peek').hidden = !(S.peek && cam.on); });
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
+toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });
+toggleRow('wxBtn', 'weather', () => { if (!S.weather) weatherNow = ''; });
 wireMemoryUI();
 function renderGlow() {
   const bars = $('#glowBars');
@@ -2040,11 +2400,13 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 syncLab(); renderPanel();
+// she starts listening for her name after your first tap (browsers need one before mic and sound work)
+addEventListener('pointerdown', () => setTimeout(startWakeWord, 300), { once: true });
 if (ENV.artifact) $('#eyesKey').title = 'Works in the downloaded file';
 try { document.fonts && document.fonts.load('40px VT323'); } catch (e) {}
 window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
-  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap };
+  say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, diary: addDiary, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type };
 requestAnimationFrame(frame);
 })();
 </script>

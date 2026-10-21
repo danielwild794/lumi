@@ -2962,10 +2962,11 @@ const rawMic = { an: null, buf: null, src: null };
   const md = navigator.mediaDevices; if (!md || !md.getUserMedia) return;
   const orig = md.getUserMedia.bind(md);
   md.getUserMedia = async c => {
-    if (c && c.audio && S.mediaAudio) {
+    if (c && c.audio) {
       const a = typeof c.audio === 'object' ? Object.assign({}, c.audio) : {};
-      a.echoCancellation = false; a.noiseSuppression = false; a.autoGainControl = false; delete a.voiceIsolation;
+      if (S.mediaAudio) { a.echoCancellation = false; a.noiseSuppression = false; a.autoGainControl = false; delete a.voiceIsolation; }
       if (!a.deviceId) { const id = await pickMic(); if (id) a.deviceId = { exact: id }; }
+      voice.micId = a.deviceId ? (a.deviceId.exact || a.deviceId.ideal || a.deviceId) : 'default';
       c = Object.assign({}, c, { audio: a });
     }
     let st_;
@@ -2975,9 +2976,10 @@ const rawMic = { an: null, buf: null, src: null };
     return st_;
   };
 })();
-/* which mic she listens with. With Bluetooth earbuds connected, Android only uses their mic by switching them into
-   phone-call mode: muffled for her, and her voice stops following your media volume. So on 'auto' she uses the
-   phone's own mic whenever earbuds are connected. You can also pick a specific mic in the menu. */
+/* which mic she listens with. On Android a page's call only goes to Bluetooth earbuds when it asks for the earbuds'
+   own mic; left to itself Chrome keeps the call on the phone's speaker. So on 'auto' (call mode, the normal setting)
+   she asks for the earbuds' mic whenever they're connected, and her voice goes to them too, like any voice app.
+   In the old media mode she used the phone's own mic instead. */
 const BT_RE = /bluetooth|airpods|buds|hands-?free|\bbt\b|headset \(|wireless/i;
 async function micList() {
   try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.label && d.deviceId); } catch (e) { return []; }
@@ -2986,7 +2988,12 @@ async function pickMic() {
   const ins = await micList(); dbg.mics = ins.map(d => d.label).join(' | ');
   if (!ins.length) return null;
   if (S.mic && S.mic !== 'auto') { const m = ins.find(d => d.label === S.mic); return m ? m.deviceId : null; }
-  if (!ins.some(d => BT_RE.test(d.label))) return null;   // no earbuds: let the phone decide
+  const buds = ins.filter(d => BT_RE.test(d.label) && d.deviceId !== 'default' && d.deviceId !== 'communications');
+  if (!buds.length) { dbg.micPicked = ''; return null; }   // no earbuds: let the phone decide
+  if (!S.mediaAudio) {
+    const b = buds.find(d => /airpod|buds|headphone|earphone|headset/i.test(d.label)) || buds[0];
+    dbg.micPicked = b.label; return b.deviceId;
+  }
   const own = ins.filter(d => !BT_RE.test(d.label) && d.deviceId !== 'default' && d.deviceId !== 'communications');
   const best = own.find(d => /speaker/i.test(d.label)) || own.find(d => /built|phone|internal|bottom|mic/i.test(d.label)) || own.find(d => !/wired/i.test(d.label)) || own[0];
   dbg.micPicked = best ? best.label : '';
@@ -3024,6 +3031,21 @@ function applyMic() {
   const want = !!(voice.muted || cutin.holding || gate.on);
   if (voice.conv && want !== voice.micSent) { voice.micSent = want; try { voice.conv.setMicMuted(want); } catch (e) {} }
 }
+/* earbuds going in or out mid-chat: move her call over to them (or back to the phone) without waking her again */
+let devT = 0;
+try {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    clearTimeout(devT);
+    devT = setTimeout(async () => {
+      if (!voice.connected || !voice.conv || !voice.conv.changeInputDevice) return;
+      const id = (await pickMic()) || 'default';
+      if (id === voice.micId) return;
+      const was = voice.micId; voice.micId = id; dbg.micSwaps = (dbg.micSwaps || 0) + 1;
+      try { await voice.conv.changeInputDevice({ inputDeviceId: id }); voice.micSent = null; applyMic(); }
+      catch (e) { voice.micId = was; dbg.micSwapErr = String((e && e.message) || e).slice(0, 80); }
+    }, 900);
+  });
+} catch (e) {}
 function cueTick(now) {
   cutTick(now); echoGate(now); applyMic();
   if (!pendingCue) return;
@@ -5162,7 +5184,7 @@ window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   stage: stageCall, stageState: () => ({ els: stage.els.map(e => ({ id: e.id, x: +e.x.toFixed(1), y: +e.y.toFixed(1), size: +e.size.toFixed(1), a: +e.a.toFixed(2), out: !!e.out, layer: e.layer })), world: stage.world && { ground: stage.world.ground, sky: stage.world.sky, weather: stage.world.weather }, me: stage.me && { x: +stage.me.x.toFixed(1), y: +stage.me.y.toFixed(1), z: +stage.me.z.toFixed(2) }, cam: Object.assign({}, stage.cam), progs: stage.progs.length, black: stage.black.until > performance.now() }), stageClear,
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; },
+  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; }, mic: () => ({ picked: dbg.micPicked || '', mics: dbg.mics || '', id: voice.micId || '', swaps: dbg.micSwaps || 0, err: dbg.micSwapErr || '' }),
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

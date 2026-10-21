@@ -2202,12 +2202,12 @@ function roamIdle() {
 const standby = { scene: '', since: 0, dozeAt: 0, activity: '', hiddenAt: 0 };
 const SCENES = {
   asleep: { act: 'asleep', start: () => applyFace({ mood: 'sleepy' }) },
-  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug', 'serene', 'mischievous']) }) },
+  idle: { act: 'just hanging out on your screen', start: () => applyFace({ mood: pick(['chill', 'curious', 'smug', 'mischievous', 'wink']) }) },
   doodle: { act: 'doodling something for yourself', start: () => { applyFace({ mood: 'thinking' }); standbyDoodle(); setTimeout(standbyDoodle, 1800); } },
-  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill', 'serene', 'awe']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
+  daydream: { act: 'daydreaming, staring off into space', start: () => { applyFace({ mood: pick(['smitten', 'thinking', 'chill', 'awe']) }); st.tgx = pick([-.9, .9]); st.tgy = -.6; st.nextLook = performance.now() + 5000; } },
   peek: { act: 'peeking in from the edge of your screen', start: () => { applyFace({ mood: 'curious' }); roamTo(pick(['peek_left', 'peek_right', 'peek_bottom']), { speed: 'normal' }); } },
   wander: { act: 'wandering around your screen', start: () => { applyFace({ mood: pick(['chill', 'smug', 'determined', 'mischievous']) }); roamTo('wander', { seconds: 7 }); } },
-  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(['chill', 'serene', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
+  hum: { act: 'humming to yourself', start: () => { applyFace({ mood: pick(['chill', 'happy']) }); spawnFx('music'); setTimeout(() => spawnFx('music'), 1600); } },
   waking: { act: 'just waking up from a nap', start: () => { applyFace({ mood: 'sleepy' }); setTimeout(() => { if (!voice.connected) { react('sleepy', 900); setTimeout(() => !voice.connected && applyFace({ mood: pick(['chill', 'curious']) }), 900); } }, 1400); } }
 };
 function pickScene() {
@@ -2221,7 +2221,7 @@ function standbyDoodle() {
   if (th.shape) spawnDoodleFx(th.shape, { pattern: pick(['pop', 'orbit', 'rise']), count: pick([1, 2]), size: 'small' }, rnd(3.5, 6));
 }
 function enterStandby(scene) {
-  if (voice.connected || voice.connecting || ENV.artifact) return;
+  if (voice.connected || voice.connecting) return;
   scene = SCENES[scene] ? scene : pickScene();
   standby.scene = scene; standby.since = performance.now(); standby.activity = SCENES[scene].act;
   st.mix = null; st.dials = blankDials();
@@ -4401,12 +4401,17 @@ function wakeBy(how, phrase) {
 /* asleep: poke her a few times and she'll wake up (probably annoyed) */
 const nap = { pokes: [], nextDream: 0, lastStir: 0 };
 function sleepPoke(now) {
-  if (ENV.artifact || voice.connected || voice.connecting) return;
+  if (voice.connected || voice.connecting) return;
   nap.pokes = nap.pokes.filter(t => now - t < 4000); nap.pokes.push(now);
   const n = nap.pokes.length, awake = standby.scene && standby.scene !== 'asleep';
   if (n === 1) { if (!awake) react('sleepy', 900); }
   else if (n === 2) { if (!awake) react(pick(['grumpy', 'unimpressed', 'sulky', 'confused']), 1100); }
-  else { nap.pokes = []; const said = voSay('waking', 1); setTimeout(() => wakeBy('poke', ''), said ? Math.max(0, VO.until - performance.now()) + 150 : 0); }
+  else {
+    nap.pokes = []; if (awake && ENV.artifact) return;
+    const said = voSay('waking', 1), wait = said ? Math.max(0, VO.until - performance.now()) + 150 : 0;
+    if (ENV.artifact) setTimeout(() => { enterStandby(pick(['idle', 'waking', 'daydream', 'doodle', 'hum'])); noticeYou(); }, wait);
+    else setTimeout(() => wakeBy('poke', ''), wait);
+  }
 }
 function stopWakeWord() { ww.want = false; if (ww.rec) { try { ww.rec.abort(); } catch (e) {} ww.rec = null; } }
 
@@ -4587,7 +4592,7 @@ addEventListener('pointerup', cornerOff, true); addEventListener('pointercancel'
 addEventListener('keydown', e => { if ((e.key === 'm' || e.key === 'M') && !e.target.closest('input,textarea')) { osdWrap.hidden ? openOSD() : closeOSD(); } });
 applyBare();
 syncLab(); renderPanel();
-if (!ENV.artifact) { enterStandby(pickScene()); noticeYou(); }
+enterStandby(pickScene()); noticeYou();
 setTimeout(voLoad, 1500);   // her recorded voice, ready before your first touch
 // she starts listening for you after your first touch (browsers need one before mic and sound work)
 addEventListener('pointerup', () => setTimeout(startWakeWord, 300), { once: true });

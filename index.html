@@ -314,6 +314,8 @@ function hslRgb(h, sat, l) {
   const a = sat * Math.min(l, 1 - l), f = n => { const k = (n + h / 30) % 12; return 255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))); };
   return [f(0), f(8), f(4)];
 }
+/* the main feeling in a face id: 'smug', 'happy+smug/grin.arc', or a touch reaction like 'r:grumpy+shook:4' -> 'grumpy' */
+const moodKey = id => String(id || '').replace(/^r:/, '').split(/[+\/:]/)[0];
 function shownMoods() { const head = String((st.shown && st.shown.id) || '').split('/')[0].split('+'); return [head[0], head[1] || null]; }
 function tintTick(now, dt) {
   let want;
@@ -1759,7 +1761,7 @@ function eyeStyle(m) { return (m.eye || '') + '/' + (m.eyeR || ''); }
 function swapTo(m, squash) {
   const prevId = st.shown && st.shown.id;
   st.shown = m;
-  { const was = String(prevId || '').split(/[+\/]/)[0], now = String(m.id || '').split(/[+\/]/)[0]; if (was !== now) moodBeat(now); }
+  { const was = moodKey(prevId), now = moodKey(m.id); if (was !== now) moodBeat(now); }
   if (prevId !== m.id && m.fx && !PERSIST_FX.has(m.fx)) spawnFx(m.fx);
   if (reduceMQ.matches) return;
   st.popV += 16; st.hopV -= 40;

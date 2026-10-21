@@ -202,6 +202,8 @@ body.bare .toast{opacity:.9}
         <div class="row"><span class="lbl">CAPTIONS</span><button id="ccBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">JUST HER FACE</span><button id="bareBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">MEDIA VOLUME, NOT CALL</span><button id="mediaVolBtn" type="button" aria-pressed="true">ON</button></div>
+        <div class="row"><span class="lbl">HER VOLUME</span><button id="herVolBtn" type="button">100%</button></div>
+        <div class="row"><span class="lbl">SHE LISTENS WITH</span><button id="micBtn" type="button">AUTO</button></div>
         <div class="row"><span class="lbl">SOUNDS</span><button id="sfxBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SAY "HEY" TO WAKE HER</span><button id="wakeBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">SHE KNOWS YOUR WEATHER</span><button id="wxBtn" type="button" aria-pressed="true">ON</button></div>
@@ -2254,7 +2256,7 @@ function volumeWords(text) {
   else if (/\b(quieter|softer|turn (it |yourself |your (voice|volume) )?down|volume down|too loud|lower your voice|not so loud)\b/.test(t)) v = v * .6;
   else hit = false;
   if (!hit) return;
-  S.herVol = clamp(v, .05, 1); saveSettings(); dbg.vol = S.herVol;
+  S.herVol = clamp(v, .05, 1); saveSettings(); dbg.vol = S.herVol; try { renderVolBtn(); } catch (e) {}
   try { voice.conv && voice.conv.setVolume({ volume: S.herVol }); } catch (e) {}
 }
 function guessMood(text) {
@@ -2476,13 +2478,33 @@ const rawMic = { an: null, buf: null, src: null };
     if (c && c.audio && S.mediaAudio) {
       const a = typeof c.audio === 'object' ? Object.assign({}, c.audio) : {};
       a.echoCancellation = false; a.noiseSuppression = false; a.autoGainControl = false; delete a.voiceIsolation;
+      if (!a.deviceId) { const id = await pickMic(); if (id) a.deviceId = { exact: id }; }
       c = Object.assign({}, c, { audio: a });
     }
-    const st_ = await orig(c);
+    let st_;
+    try { st_ = await orig(c); }
+    catch (e) { if (c && c.audio && c.audio.deviceId && e && e.name !== 'NotAllowedError') { const a = Object.assign({}, c.audio); delete a.deviceId; c = Object.assign({}, c, { audio: a }); dbg.micFallback = String(e.name || e); st_ = await orig(c); } else throw e; }
     if (c && c.audio && st_.getAudioTracks().length) tapMic(st_);
     return st_;
   };
 })();
+/* which mic she listens with. With Bluetooth earbuds connected, Android only uses their mic by switching them into
+   phone-call mode: muffled for her, and her voice stops following your media volume. So on 'auto' she uses the
+   phone's own mic whenever earbuds are connected. You can also pick a specific mic in the menu. */
+const BT_RE = /bluetooth|airpods|buds|hands-?free|\bbt\b|headset \(|wireless/i;
+async function micList() {
+  try { return (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.label && d.deviceId); } catch (e) { return []; }
+}
+async function pickMic() {
+  const ins = await micList(); dbg.mics = ins.map(d => d.label).join(' | ');
+  if (!ins.length) return null;
+  if (S.mic && S.mic !== 'auto') { const m = ins.find(d => d.label === S.mic); return m ? m.deviceId : null; }
+  if (!ins.some(d => BT_RE.test(d.label))) return null;   // no earbuds: let the phone decide
+  const own = ins.filter(d => !BT_RE.test(d.label) && d.deviceId !== 'default' && d.deviceId !== 'communications');
+  const best = own.find(d => /speaker/i.test(d.label)) || own.find(d => /built|phone|internal|bottom|mic/i.test(d.label)) || own.find(d => !/wired/i.test(d.label)) || own[0];
+  dbg.micPicked = best ? best.label : '';
+  return best ? best.deviceId : null;
+}
 function tapMic(stream) {
   try {
     if (!rawMic.ctx) rawMic.ctx = new AudioContext();
@@ -3911,6 +3933,21 @@ function toggleRow(id, key, after) {
 toggleRow('ccBtn', 'cc', () => { if (!S.cc) { capQueue = []; clearTimeout(capTimer); $('#captions').textContent = ''; } });
 toggleRow('bareBtn', 'bare', applyBare);
 toggleRow('mediaVolBtn', 'mediaAudio', () => showToast('Takes effect next time she wakes up.'));
+const VOL_STEPS = [1, .8, .6, .45, .3, .2];
+function renderVolBtn() { $('#herVolBtn').textContent = Math.round((S.herVol == null ? 1 : S.herVol) * 100) + '%'; }
+$('#herVolBtn').addEventListener('click', () => {
+  const v = S.herVol == null ? 1 : S.herVol, i = VOL_STEPS.findIndex(x => x < v - .01);
+  S.herVol = i < 0 ? 1 : VOL_STEPS[i]; saveSettings(); renderVolBtn();
+  try { voice.conv && voice.conv.setVolume({ volume: S.herVol }); } catch (e) {}
+});
+renderVolBtn();
+async function renderMicBtn() { $('#micBtn').textContent = (!S.mic || S.mic === 'auto') ? 'AUTO' : S.mic.slice(0, 22).toUpperCase(); }
+$('#micBtn').addEventListener('click', async () => {
+  const names = ['auto'].concat((await micList()).filter(d => d.deviceId !== 'default' && d.deviceId !== 'communications').map(d => d.label));
+  const i = names.indexOf(S.mic || 'auto'); S.mic = names[(i + 1) % names.length]; saveSettings(); renderMicBtn();
+  showToast(names.length > 1 ? 'Takes effect next time she wakes up.' : 'Your browser only shows one mic right now.');
+});
+renderMicBtn();
 toggleRow('reactBtn', 'react');
 toggleRow('sfxBtn', 'sfx', () => { if (S.sfx) sfx.boop(1); });
 toggleRow('wakeBtn', 'wake', () => { S.wake ? startWakeWord() : stopWakeWord(); });

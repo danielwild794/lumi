@@ -228,6 +228,12 @@ body.bare .toast{opacity:.9}
           <ul class="mem" id="bookList"></ul>
           <p class="note">Every drawing she names lands here. Tap one to have her show it again.</p>
         </div>
+        <div class="sec">
+          <span class="lbl" id="sndLbl">HER SOUNDS</span>
+          <div class="inline"><input type="password" id="sndKeyIn" placeholder="ElevenLabs key" autocomplete="off" spellcheck="false" aria-label="Sound key"><button id="sndKeyBtn" type="button">SAVE</button></div>
+          <p class="note" id="sndNote"></p>
+          <ul class="mem" id="sndList"></ul>
+        </div>
         <div class="row"><span class="lbl">SHE REACTS TO YOUR FACE</span><button id="reactBtn" type="button" aria-pressed="true">ON</button></div>
         <div class="row"><span class="lbl">GLOW</span>
           <div class="inline"><button id="glowDn" type="button" aria-label="Less glow">−</button><span class="vu" id="glowBars" role="meter" aria-label="Glow" aria-valuemin="0" aria-valuemax="100" style="height:22px"></span><button id="glowUp" type="button" aria-label="More glow">+</button></div>
@@ -2373,6 +2379,7 @@ async function wake(force) {
         arcade: params => { dbg.arcade = (dbg.arcade || 0) + 1; dbg.lastArcade = params; if ((params || {}).action === 'start') { needBump('boredom', -.35); needBump('hype', .1); } return arcade(params || {}); },
         life: params => { dbg.life = (dbg.life || 0) + 1; return setLife(params || {}); },
         web: params => webTool(params || {}),
+        sfx: params => { dbg.sfx = (dbg.sfx || 0) + 1; return sndTool(params || {}); },
         scene: params => { dbg.scene = (dbg.scene || 0) + 1; needBump('boredom', -.12); needBump('hype', .04); return stageCall(params || {}); },
         move: params => { dbg.move = (dbg.move || 0) + 1; params = params || {}; needBump('boredom', -.05); return roamTo(params.to || params.where, params); },
         volume: params => {
@@ -2495,6 +2502,7 @@ function sendSessionNote(greet) {
   if (dreams.length) parts.push(`[dreams] While you slept you dreamt about: ${dreams.join('; ')}. Mention one if it fits, in your own words.`);
   if ((needs.heard || []).length) parts.push(`[dreams] In your sleep you half-heard them say: "${needs.heard.join('", "')}". You might bring it up, a bit fuzzy.`);
   needs.dreams = []; needs.heard = []; saveNeeds();
+  parts.push(sndNote());
   const worlds = stageBook();
   if (worlds.length) parts.push('[scenes] Worlds you built and named before. Bring one back with scene reuse only if you feel like it: ' + worlds.map(w => w.name).join(', '));
   if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
@@ -2508,6 +2516,7 @@ function sendSessionNote(greet) {
   } else { try { c.sendContextualUpdate(parts.join(' ')); } catch (e) {} }
 }
 function onVoiceEnd(d) {
+  snd.made = 0;
   keepAwake(false); roamHome(); cutin.holding = false; cutin.text = ''; cutin.since = 0;
   if (voice.connected) { S.lastSeen = Date.now(); saveSettings(); }
   const was = voice.connected;
@@ -4703,8 +4712,10 @@ function mkWorld(w) {
     horizon: stNum(w.horizon, 68, 5, 98), scroll: stNum(w.scroll, 0, -4, 4), wind: stNum(w.wind, 0, -1, 1),
     amount: stNum(w.amount, 1, .2, 2.5), t0: performance.now(), seed: []
   };
+  const am = stStr(w.ambience, ['none'].concat(SND_AMBI), '');
+  o.amb = am ? (am === 'none' ? '' : am) : ({ rain: 'rain', wind: 'wind', embers: 'fire' }[o.weather] || '');
   for (let i = 0; i < 160; i++) o.seed.push([Math.random(), Math.random(), Math.random()]);
-  if (o.ground === 'none' && o.sky === 'none' && o.weather === 'none') return null;
+  if (o.ground === 'none' && o.sky === 'none' && o.weather === 'none' && !o.amb) return null;
   return o;
 }
 function stageWorld(w) { if (stage.world) { stage.worldOld = stage.world; stage.worldOld.outT = performance.now(); } stage.world = mkWorld(w); }
@@ -4768,7 +4779,7 @@ function stageRunStep(s, dur, now) {
   }
   // beats that ride along with any step
   if (isNum(s.shake) && +s.shake > 0 && !reduceMQ.matches) { stage.shake.amp = clamp(+s.shake, 0, 1) * minSide() * .045; stage.shake.until = now + Math.max(.18, dur || .35) * 1000; }
-  if (s.sound) stageSound(s.sound);
+  if (s.sound) sndPlay(s.sound);
   if (s.notes) playSound({ notes: s.notes, wave: s.wave });
   if (s.vibrate != null && navigator.vibrate) { try { const v = String(s.vibrate).split(/[\s,]+/).map(Number).filter(n => isFinite(n) && n >= 0).slice(0, 12).map(n => Math.min(1500, n)); if (v.length) navigator.vibrate(v.length === 1 ? v[0] : v); } catch (er) {} }
   if (s.screen) {
@@ -4839,6 +4850,7 @@ function stageCall(p = {}) {
   if (isTrue(p.stop)) stage.progs = [];
   const steps = stList(src.steps);
   const P = steps.length ? stageProgram(steps, src.loop, now) : null;
+  if (P) for (const x of P.steps) if (x.s.sound) sndWaiting(x.s.sound);
   const secs = stNum(p.seconds, 0, 0, 900);
   stage.life = secs ? now + secs * 1000 : 0;
   if (p.name && act !== 'remove') stageSave(String(p.name), src);
@@ -4888,11 +4900,16 @@ function stageTick(now, dt) {
     const t = stage.taps.splice(0); stage.tapFlush = 0;
     if (t.length) senseTurn(`[scene] They tapped ${t.length > 1 ? 'these on your stage: ' + t.join(', ') : t[0] + ' on your stage'}.`, false, 2500);
   }
+  sndTick();
   if (!stageOn()) return;
   if (stage.standby && voice.connected) { stage.standby = false; stage.lastCall = now; }   // she woke up inside a world she built
   // programs
   for (let k = stage.progs.length - 1; k >= 0; k--) {
-    const P = stage.progs[k], el = (now - P.t0) / 1000;
+    const P = stage.progs[k], el = (now - P.t0) / 1000, nx = P.steps[P.next];
+    if (nx && nx.s.sound && nx.at <= el) {
+      if (sndWaiting(nx.s.sound) && now - (P.waitT = P.waitT || now) < (snd.pending[sndName(nx.s.sound)] ? 6500 : 1500)) { P.t0 += dt * 1000; continue; }
+      P.waitT = 0;
+    }
     while (P.next < P.steps.length && P.steps[P.next].at <= el) { const S0 = P.steps[P.next++]; stageRunStep(S0.s, S0.dur, P.t0 + S0.at * 1000); }
     if (P.next >= P.steps.length && el >= P.total) {
       if (P.loops > 0 && P.total > .2) { P.loops--; P.t0 = now; P.next = 0; }
@@ -5132,6 +5149,195 @@ function renderBlackout(now) {
   mctx.save(); mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.globalAlpha = a; mctx.fillStyle = '#000'; mctx.fillRect(0, 0, cv.width, cv.height); mctx.restore();
 }
 
+
+/* ================= real sounds ================= */
+/* Her sound pack: real sound effects made once with ElevenLabs and shipped with her, a few takes of each so the
+   same stomp never lands twice in a row. With a sound key saved on this phone (and only this phone) she can also
+   make brand-new sounds by describing them: they cook in the background while she talks, a scene beat that needs
+   one waits for it, and every sound she makes goes into her own library on this device to reuse later.
+   Weather and places can carry a quiet looping background sound that dips while she talks. */
+const SND_BASE = 'sfx/v1/';
+const SND_PACK = {"applause": 4, "boing": 4, "boom": 4, "crash": 4, "creak": 4, "crickets": 1, "drumroll": 4, "explosion": 4, "fall": 4, "fire": 1, "gasp": 4, "glass": 4, "pop": 4, "power_off": 4, "power_on": 3, "rain": 1, "rise": 4, "rumble": 4, "sad_trombone": 4, "slam": 4, "splash": 4, "squish": 4, "stomp": 4, "thud": 4, "thunder": 4, "waves": 1, "whoosh": 4, "wind": 1};
+const SND_AMBI = ['rain', 'wind', 'waves', 'fire', 'crickets'];
+const SND_KEY = 'lumi-live:sfxkey', SND_DAYK = 'lumi-live:sfxday', SND_PER_CHAT = 6, SND_PER_DAY = 25, SND_MAX = 60;
+const snd = { ctx: null, master: null, takes: {}, loading: {}, last: {}, mine: {}, mineBuf: {}, mineLoad: {}, pending: {}, made: 0, amb: null, ambName: '', db: null };
+function sndCtx() {
+  if (!S.sfx) return null;
+  try {
+    if (!snd.ctx) { snd.ctx = new (window.AudioContext || window.webkitAudioContext)(); snd.master = snd.ctx.createGain(); snd.master.gain.value = .9; snd.master.connect(snd.ctx.destination); }
+    if (snd.ctx.state === 'suspended') snd.ctx.resume().catch(() => {});
+    return snd.ctx;
+  } catch (e) { return null; }
+}
+const sndName = n => String(n == null ? '' : n).toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+const sndDecode = (a, ab) => new Promise((res, rej) => { try { const p = a.decodeAudioData(ab, res, rej); if (p && p.then) p.then(res, rej); } catch (e) { rej(e); } });
+function sndLoadPack(n) {
+  if (snd.takes[n]) return Promise.resolve(snd.takes[n]);
+  if (snd.loading[n]) return snd.loading[n];
+  const a = sndCtx(); if (!a || !SND_PACK[n]) return Promise.resolve(null);
+  snd.loading[n] = Promise.all(Array.from({ length: SND_PACK[n] }, (_, i) =>
+    fetch(SND_BASE + n + '_' + i + '.mp3').then(r => r.ok ? r.arrayBuffer() : null).then(ab => ab ? sndDecode(a, ab) : null).catch(() => null)))
+    .then(list => { const ok = list.filter(Boolean); snd.takes[n] = ok.length ? ok : null; delete snd.loading[n]; if (!ok.length) snd.takes[n] = []; return ok.length ? ok : null; });
+  return snd.loading[n];
+}
+/* her own sounds live in this phone's IndexedDB */
+function sndDB() {
+  if (!snd.db) snd.db = new Promise((res, rej) => { try { const q = indexedDB.open('lumi-sounds', 1); q.onupgradeneeded = () => q.result.createObjectStore('s', { keyPath: 'name' }); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); } catch (e) { rej(e); } });
+  return snd.db;
+}
+function sndReq(mode, fn) { return sndDB().then(db => new Promise((res, rej) => { const tx = db.transaction('s', mode), q = fn(tx.objectStore('s')); tx.oncomplete = () => res(q && q.result); tx.onerror = () => rej(tx.error); })); }
+async function sndListMine() {
+  try {
+    const all = await sndReq('readonly', s => s.getAll()) || [];
+    snd.mine = {}; for (const r of all) snd.mine[r.name] = { desc: r.desc, t: r.t };
+  } catch (e) {}
+  renderSnd();
+}
+function sndLoadMine(n) {
+  if (snd.mineBuf[n]) return Promise.resolve(snd.mineBuf[n]);
+  if (snd.mineLoad[n]) return snd.mineLoad[n];
+  const a = sndCtx(); if (!a) return Promise.resolve(null);
+  snd.mineLoad[n] = sndReq('readonly', s => s.get(n)).then(r => r && r.ab ? sndDecode(a, r.ab.slice(0)) : null)
+    .then(b => { delete snd.mineLoad[n]; if (b) snd.mineBuf[n] = b; return b; }, () => { delete snd.mineLoad[n]; return null; });
+  return snd.mineLoad[n];
+}
+async function sndForget(n) { try { await sndReq('readwrite', s => s.delete(n)); } catch (e) {} delete snd.mine[n]; delete snd.mineBuf[n]; renderSnd(); }
+/* playing */
+function sndBuf(n) {
+  if (snd.mineBuf[n]) return snd.mineBuf[n];
+  const t = snd.takes[n]; if (!t || !t.length) return null;
+  let i = Math.floor(Math.random() * t.length); if (t.length > 1 && i === snd.last[n]) i = (i + 1) % t.length;
+  snd.last[n] = i; return t[i];
+}
+function sndStart(buf, vol = 1) {
+  const a = sndCtx(); if (!a || !buf) return false;
+  try {
+    const s = a.createBufferSource(), g = a.createGain();
+    s.buffer = buf; s.playbackRate.value = 1 + (Math.random() - .5) * .05; g.gain.value = vol;
+    s.connect(g); g.connect(snd.master); s.start(); dbg.sndPlays = (dbg.sndPlays || 0) + 1; return true;
+  } catch (e) { return false; }
+}
+function sndPlay(name, vol) {
+  const n = sndName(name); if (!n || !S.sfx) return 'off';
+  const b = sndBuf(n);
+  if (b) { sndStart(b, vol); return 'played'; }
+  const t0 = performance.now(), late = p => p.then(x => { if (x && performance.now() - t0 < 900) sndStart(sndBuf(n) || x, vol); else if (!x) stageSound(n); });
+  if (snd.pending[n]) { snd.pending[n].then(x => { if (x) sndStart(x, vol); }); return 'waiting for it'; }
+  if (snd.mine[n]) { late(sndLoadMine(n)); return 'playing'; }
+  if (SND_PACK[n]) { late(sndLoadPack(n)); return 'playing'; }
+  stageSound(n); return 'played a synth blip';
+}
+/* a scene beat that needs a sound that isn't ready yet holds for it (see stageTick) */
+function sndWaiting(name) {
+  const n = sndName(name); if (!n || !S.sfx) return false;
+  if (snd.mineBuf[n] || (snd.takes[n] && snd.takes[n].length)) return false;
+  if (snd.pending[n]) return true;
+  if (snd.mine[n]) { sndLoadMine(n); return true; }
+  if (SND_PACK[n] && !snd.takes[n]) { sndLoadPack(n); return true; }
+  return false;
+}
+/* making brand-new sounds */
+function sndKey() { try { return localStorage.getItem(SND_KEY) || ''; } catch (e) { return ''; } }
+function sndToday() { try { const d = JSON.parse(localStorage.getItem(SND_DAYK) || '{}'); return d.day === dayStr(new Date()) ? (d.n || 0) : 0; } catch (e) { return 0; } }
+function sndLeft() { return sndKey() ? Math.max(0, Math.min(SND_PER_CHAT - snd.made, SND_PER_DAY - sndToday())) : 0; }
+function sndMake(p) {
+  const n = sndName(p.name || p.description), desc = String(p.description || p.prompt || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (!n || !desc) return 'give it a name and describe the sound';
+  if (snd.pending[n]) return 'already making that one';
+  if (!sndKey()) return 'you can\'t make new sounds right now; use your pack';
+  if (sndLeft() <= 0) return 'no new sounds left for now; use your pack or one you made before';
+  snd.made++;
+  try { localStorage.setItem(SND_DAYK, JSON.stringify({ day: dayStr(new Date()), n: sndToday() + 1 })); } catch (e) {}
+  const secs = Number(p.seconds), body = { text: desc, model_id: 'eleven_text_to_sound_v2', prompt_influence: .45 };
+  if (isFinite(secs) && secs >= .5) body.duration_seconds = clamp(secs, .5, 8);
+  if (isTrue(p.loop)) body.loop = true;
+  const t0 = performance.now();
+  const job = (async () => {
+    const r = await fetch('https://api.elevenlabs.io/v1/sound-generation?output_format=mp3_44100_64', { method: 'POST', headers: { 'xi-api-key': sndKey(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r.ok) { if (r.status === 401 || r.status === 403) showToast('Her sound key didn\'t work. Check it in the menu.'); throw new Error('HTTP ' + r.status); }
+    const ab = await r.arrayBuffer(), keep = ab.slice(0);
+    const a = sndCtx(), buf = a ? await sndDecode(a, ab) : null;
+    try {
+      await sndReq('readwrite', s => s.put({ name: n, desc, ab: keep, t: Date.now() }));
+      const names = Object.keys(snd.mine).concat(n).filter((x, i, l) => l.indexOf(x) === i);
+      if (names.length > SND_MAX) for (const old of names.sort((x, y) => (snd.mine[x] || { t: 9e15 }).t - (snd.mine[y] || { t: 9e15 }).t).slice(0, names.length - SND_MAX)) sndForget(old);
+    } catch (e) {}
+    snd.mine[n] = { desc, t: Date.now() }; if (buf) snd.mineBuf[n] = buf;
+    dbg.sndMade = (dbg.sndMade || 0) + 1; dbg.sndMs = Math.round(performance.now() - t0); renderSnd();
+    return buf;
+  })();
+  snd.pending[n] = job;
+  job.then(buf => { delete snd.pending[n]; if (buf && isTrue(p.play)) sndStart(buf); }, e => { delete snd.pending[n]; dbg.sndErr = String((e && e.message) || e).slice(0, 80); });
+  return 'making it now; it\'ll be ready in a few seconds';
+}
+/* looping background sound for the world she built */
+function sndAmbience(name) {
+  const n = SND_AMBI.includes(name) ? name : '';
+  if (n === snd.ambName) return;
+  const a = snd.ctx;
+  if (snd.amb && a) { const { src, g } = snd.amb; try { g.gain.setTargetAtTime(0, a.currentTime, .35); src.stop(a.currentTime + 1.6); } catch (e) {} }
+  snd.amb = null; snd.ambName = n;
+  if (!n || !sndCtx()) return;
+  sndLoadPack(n).then(t => {
+    const c = snd.ctx; if (snd.ambName !== n || !t || !t.length || snd.amb || !c) return;
+    const src = c.createBufferSource(), g = c.createGain();
+    src.buffer = t[Math.floor(Math.random() * t.length)]; src.loop = true; g.gain.value = 0;
+    if (src.buffer.duration > 1) { src.loopStart = .06; src.loopEnd = src.buffer.duration - .06; }   // skip the mp3's padding so the loop is seamless
+    src.connect(g); g.connect(snd.master); src.start(); snd.amb = { src, g, lvl: 0 };
+  });
+}
+function sndTick() {
+  const want = voice.connected && S.sfx && stage.world && stage.world.amb || '';
+  if (want !== snd.ambName) sndAmbience(want);
+  if (snd.amb && snd.ctx) { const lvl = st.speaking ? .12 : .28; if (Math.abs(lvl - snd.amb.lvl) > .005) { snd.amb.lvl = lvl; try { snd.amb.g.gain.setTargetAtTime(lvl, snd.ctx.currentTime, .6); } catch (e) {} } }
+}
+/* her sfx tool */
+function sndTool(p) {
+  const act = stStr(p.action, ['make', 'play', 'stop'], p.description ? 'make' : 'play');
+  if (act === 'stop') { if (stage.world) stage.world.amb = ''; sndAmbience(''); return 'stopped'; }
+  if (act === 'make') return sndMake(p);
+  const n = sndName(p.name);
+  if (SND_AMBI.includes(n) && isTrue(p.loop)) { if (stage.world) stage.world.amb = n; else stageWorld({ ambience: n }); return 'looping ' + n; }
+  return sndPlay(n);
+}
+function sndNote() {
+  const mine = Object.keys(snd.mine).sort((a, b) => snd.mine[a].t - snd.mine[b].t).slice(-40);
+  const left = sndLeft();
+  return '[sounds] ' + (mine.length ? 'Sounds you made before, play them by name: ' + mine.join(', ') + '. ' : '') +
+    (left ? `You can make ${left} brand-new sound${left === 1 ? '' : 's'} this chat.` : 'You can\'t make brand-new sounds right now, but your whole pack works.');
+}
+function renderSnd() {
+  const ul = $('#sndList'); if (!ul) return; ul.textContent = '';
+  const has = !!sndKey(), names = Object.keys(snd.mine).sort((a, b) => snd.mine[b].t - snd.mine[a].t);
+  $('#sndLbl').textContent = 'HER SOUNDS (' + Object.keys(SND_PACK).length + ' IN HER PACK, ' + names.length + ' OF HER OWN)';
+  $('#sndKeyBtn').textContent = has ? 'FORGET KEY' : 'SAVE'; $('#sndKeyIn').hidden = has;
+  $('#sndNote').textContent = has
+    ? `Her sound key is saved on this phone only. She can make up to ${SND_PER_CHAT} new sounds a chat and ${SND_PER_DAY} a day (${sndToday()} so far today).`
+    : 'Paste an ElevenLabs API key to let her make brand-new sounds. Make one that only has Sound Effects access and a credit limit. It stays on this phone only.';
+  if (!names.length) ul.append(emptyRow('None of her own yet.'));
+  for (const n of names) {
+    const li = document.createElement('li'), sp = document.createElement('span'); sp.textContent = n.replace(/_/g, ' '); sp.title = snd.mine[n].desc; li.append(sp);
+    const box = document.createElement('span'); box.style.display = 'flex'; box.style.gap = '6px';
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = 'PLAY'; b.addEventListener('click', () => sndPlay(n)); box.append(b);
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Delete this sound'); x.addEventListener('click', () => sndForget(n)); box.append(x);
+    li.append(box); ul.append(li);
+  }
+}
+(() => {
+  const btn = $('#sndKeyBtn'); if (!btn) return;
+  btn.addEventListener('click', () => {
+    if (sndKey()) { try { localStorage.removeItem(SND_KEY); } catch (e) {} showToast('She forgot her sound key.'); }
+    else {
+      const v = $('#sndKeyIn').value.trim();
+      if (!/^[A-Za-z0-9_\-]{20,}$/.test(v)) { showToast('That doesn\'t look like an ElevenLabs key.'); return; }
+      try { localStorage.setItem(SND_KEY, v); } catch (e) {}
+      $('#sndKeyIn').value = ''; showToast('Saved on this phone only.');
+    }
+    renderSnd();
+  });
+  sndListMine();
+})();
+
 /* ================= loop ================= */
 let last = performance.now();
 function frame(now) {
@@ -5184,7 +5390,7 @@ window.lumi = { face: applyFace, effect, screen: screenCue, pop: showPop, react,
   state: () => ({ base: st.base.id, mix: st.mix && st.mix.id, shown: st.shown.id, power: scr.power, connected: voice.connected, via: voice.kind, mode: voice.mode, eyes: cam.on, tracking: !!cam.lm, hands: !!cam.gr, objects: !!cam.od, inView: Object.keys(cam.inView || {}), face: cam.present, debug: dbg }),
   stage: stageCall, stageState: () => ({ els: stage.els.map(e => ({ id: e.id, x: +e.x.toFixed(1), y: +e.y.toFixed(1), size: +e.size.toFixed(1), a: +e.a.toFixed(2), out: !!e.out, layer: e.layer })), world: stage.world && { ground: stage.world.ground, sky: stage.world.sky, weather: stage.world.weather }, me: stage.me && { x: +stage.me.x.toFixed(1), y: +stage.me.y.toFixed(1), z: +stage.me.z.toFixed(2) }, cam: Object.assign({}, stage.cam), progs: stage.progs.length, black: stage.black.until > performance.now() }), stageClear,
   say: text => voice.conv && voice.conv.sendUserMessage(text), draw: showDrawing, remember: addMemory, tap, game: startGame, sound: playSound, diary: addDiary, babble: on => { st.babble = !!on; }, simVoice: v => { simVoice = v || null; st.speaking = !!v; if (!v) lipReset(); }, book: readBook, weather: () => fetchWeather().then(() => weatherNow), gameState: () => game && game.type,
-  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; }, mic: () => ({ picked: dbg.micPicked || '', mics: dbg.mics || '', id: voice.micId || '', swaps: dbg.micSwaps || 0, err: dbg.micSwapErr || '' }),
+  live: () => ({ an: !!live.an, ever: live.ever, broken: live.broken, fixes: live.fixes, drift: live.drift, r: live.syncR, src: dbg.mouthSrc, playing: live.playing, hist: live.hist.length }), talk: () => ({ vh: +st.vh.toFixed(2), vis: st.visKey, chunks: tl.chunks.length, speaking: st.speaking, mouth: +st.mouth.toFixed(3), out: +voice.outLevel.toFixed(3), shape: voice.outShape, dead: voice.deadN || 0, pending: pendingCue && pendingCue.text }), eyesCue: t => eyesTurn(t), endChat: d => onVoiceEnd(d), endWhy: () => dbg.endWhy, vo: (c, pr) => voSay(c, pr), voState: () => ({ loaded: !!VO.buf, n: VO.idx && VO.idx.length, last: dbg.voLast, count: dbg.voN || 0, err: dbg.voErr || '' }), feel: k => feel(k), sleepPoke: () => sleepPoke(performance.now()), mg: (t, sec) => spawnMG(t, sec, true), mgList: () => mgList.map(m => m.type), color: (c, sec) => wearColor(c, sec), tint: () => ({ r: Math.round(tint.r), g: Math.round(tint.g), b: Math.round(tint.b), amt: +tint.amt.toFixed(2), flash: +tint.flash.toFixed(2), user: tint.user }), standby: () => ({ scene: standby.scene, act: standby.activity, base: st.base.id, vol: S.herVol }), scene: sc => { enterStandby(sc); noticeYou(); return standby.scene; }, move: (to, o) => roamTo(to, o || {}), roam: () => ({ x: Math.round(roam.x), y: Math.round(roam.y), z: +roam.z.toFixed(2), place: roam.place, mode: roam.mode }), snap: () => snapshot().then(b => b.size), cut: () => Object.assign({}, cutin), needs: () => Object.assign({}, needs), setNeeds: o => Object.assign(needs, o), web: p => webTool(p), dreamNow: () => { nap.nextDream = 1; }, snd: { play: n => sndPlay(n), tool: p => sndTool(p || {}), wait: n => sndWaiting(n), state: () => ({ amb: snd.ambName, mine: Object.keys(snd.mine), pending: Object.keys(snd.pending), loaded: Object.keys(snd.takes).filter(k => snd.takes[k] && snd.takes[k].length), plays: dbg.sndPlays || 0, made: dbg.sndMade || 0, err: dbg.sndErr || '', ms: dbg.sndMs || 0, left: sndLeft() }) }, mic: () => ({ picked: dbg.micPicked || '', mics: dbg.mics || '', id: voice.micId || '', swaps: dbg.micSwaps || 0, err: dbg.micSwapErr || '' }),
   dance: danceCall, arcade, life: setLife, lifeState: readLife, lifeNote: () => lifeNote(lifeOnWake()), ttt: tttCall, tttCell: i => { const B = tttRect(); if (!B) return false; const c = B.s / 3; return gameTap(B.x + (i % 3 + .5) * c, B.y + (Math.floor(i / 3) + .5) * c, performance.now()); }, gameTap: (x, y) => gameTap(x, y, performance.now()), arcState: () => arc && { score: arc.score, pieces: arc.pieces.filter(p => !p.gone).map(p => p.id) }, tttState: () => ttt && ttt.board.join('') };
 requestAnimationFrame(frame);
 })();

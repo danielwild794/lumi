@@ -4699,7 +4699,7 @@ function mkStageEl(q, now) {
   if (!e.shape && !e.text) return null;
   return e;
 }
-function stageFind(id) { return stage.els.find(e => e.id === String(id) && !e.out); }
+function stageFind(id) { const k = String(id).toLowerCase(); return stage.els.find(e => e.id.toLowerCase() === k && !e.out); }
 function stageExit(e, how, now) { if (!e || e.out) return; e.out = now; e.exit = stStr(how, ST_EXITS, 'fade'); if (e.exit === 'instant') e.out = now - 1e4; if (e.exit === 'glitch') sfx.static(); }
 
 /* the world around her: ground, sky, weather */
@@ -4816,8 +4816,9 @@ function stageCall(p = {}) {
   if (act === 'clear') { stageClear(how === 'cut' ? 'instant' : 'fade'); return 'cleared'; }
   let src = p;
   if (p.reuse) {
-    const k = bookKey(p.reuse), b = stageBook(), hit = b.find(s => bookKey(s.name) === k) || b.find(s => bookKey(s.name).includes(k) && k.length > 2);
-    if (hit) src = Object.assign({}, hit, { steps: p.steps || hit.steps, loop: p.loop != null ? p.loop : hit.loop });
+    const k = bookKey(p.reuse), b = stageBook().filter(stageFull), hit = b.find(s => bookKey(s.name) === k) || b.find(s => bookKey(s.name).includes(k) && k.length > 2);
+    if (hit) { src = Object.assign({}, hit, { steps: stList(p.steps).length ? p.steps : hit.steps, loop: p.loop != null ? p.loop : hit.loop }); if (act === 'play' || act === 'add') act = 'set'; }
+    else dbg.stageMiss = p.reuse;
   }
   if (act === 'set') {
     const quick = how === 'cut' || how === 'static' || how === 'flip' || how === 'glitch';
@@ -4853,7 +4854,16 @@ function stageCall(p = {}) {
   if (P) for (const x of P.steps) if (x.s.sound) sndWaiting(x.s.sound);
   const secs = stNum(p.seconds, 0, 0, 900);
   stage.life = secs ? now + secs * 1000 : 0;
-  if (p.name && act !== 'remove') stageSave(String(p.name), src);
+  if (act === 'set') stage.spec = { world: src.world || null, elements: stList(src.elements).slice(0, 40), steps: stList(src.steps).slice(0, 40), loop: src.loop || false };
+  else if (stage.spec) {
+    if (act === 'add') stage.spec.elements = stage.spec.elements.concat(stList(src.elements)).slice(-40);
+    else if (act === 'update') for (const q of stList(src.elements)) { const i = stage.spec.elements.findIndex(x => String(x.id).toLowerCase() === String(q.id).toLowerCase()); if (i >= 0) stage.spec.elements[i] = Object.assign({}, stage.spec.elements[i], q); }
+    else if (act === 'remove') { const ids = new Set(String(p.ids || '').toLowerCase().split(/[\s,]+/)); stage.spec.elements = stage.spec.elements.filter(x => !ids.has(String(x.id).toLowerCase())); }
+    if (steps.length && act !== 'set') stage.spec.steps = steps.slice(0, 40);
+    if (src.world && act !== 'remove') stage.spec.world = src.world;
+  }
+  // "save this" with nothing new in the call saves what's on her stage right now
+  if (p.name && act !== 'remove') stageSave(String(p.name), stageFull(src) ? src : (stage.spec || src));
   dbg.stage = (dbg.stage || 0) + 1; dbg.lastStage = p;
   const n = stage.els.filter(e => !e.out).length;
   return `${act}: ${n} piece${n === 1 ? '' : 's'} on stage${stage.world ? ', world on' : ''}${P ? `, ${P.steps.length} beat${P.steps.length === 1 ? '' : 's'} over ${P.total.toFixed(1)}s${P.loops ? ' looping' : ''}` : ''}${stage.me ? ', your face is placed on the stage' : ''}`;
@@ -4869,14 +4879,17 @@ const stageOn = () => stage.els.length > 0 || !!stage.world || !!stage.worldOld 
 
 /* her scene book: whole worlds she named, so she can bring one back (they also fill her standby time) */
 function stageBook() { try { const b = JSON.parse(localStorage.getItem(STAGE_KEY) || '[]'); return Array.isArray(b) ? b : []; } catch (e) { return []; } }
+const stageFull = s => !!(s && ((Array.isArray(s.elements) && s.elements.length) || (s.world && typeof s.world === 'object')));
 function stageSave(name, src) {
-  const k = bookKey(name); if (!k) return;
+  const k = bookKey(name); if (!k || !stageFull(src)) return;   // never save (or overwrite a good one with) an empty scene
   const entry = { name: name.slice(0, 32), world: src.world || null, elements: stList(src.elements).slice(0, 40), steps: stList(src.steps).slice(0, 40), loop: src.loop || false, t: Date.now() };
   if (JSON.stringify(entry).length > 60000) return;
   const b = stageBook().filter(s => bookKey(s.name) !== k); b.push(entry);
   try { localStorage.setItem(STAGE_KEY, JSON.stringify(b.slice(-24))); } catch (e) {}
 }
 
+/* the double stomp they asked her to save on Oct 27 got stored empty by a bug; put her real one back once */
+(() => { try { const b = stageBook(), i = b.findIndex(x => bookKey(x.name) === 'double foot stomp'); if (i >= 0 && !stageFull(b[i])) { b[i] = Object.assign({"name":"double foot stomp","world":null,"elements":[{"id":"footL","paths":"M38 34 Q58 28 66 40 Q72 54 66 68 Q62 80 60 90 Q54 98 45 96 Q36 92 36 80 Q35 68 34 56 Q32 40 38 34 Z M31 32 Q29 18 37 18 Q43 19 43 31 M45 28 Q44 17 50 16 Q55 17 54 28 M56 28 Q57 19 61 19 Q65 20 63 30 M65 33 Q68 25 71 27 Q74 30 69 38 M68 40 Q73 35 75 38 Q76 42 71 44","size":70,"x":28,"y":10,"layer":"front","solid":true,"appear":"pop","flip":true},{"id":"footR","paths":"M38 34 Q58 28 66 40 Q72 54 66 68 Q62 80 60 90 Q54 98 45 96 Q36 92 36 80 Q35 68 34 56 Q32 40 38 34 Z M31 32 Q29 18 37 18 Q43 19 43 31 M45 28 Q44 17 50 16 Q55 17 54 28 M56 28 Q57 19 61 19 Q65 20 63 30 M65 33 Q68 25 71 27 Q74 30 69 38 M68 40 Q73 35 75 38 Q76 42 71 44","size":70,"x":72,"y":10,"layer":"front","solid":true,"appear":"pop"}],"steps":[{"target":"me","mood":"nervous"},{"at":1,"target":"footL","y":50,"size":110,"x":30,"seconds":0.3,"ease":"in"},{"at":1,"target":"footR","y":50,"size":110,"x":70,"seconds":0.3,"ease":"in"},{"sound":"boom","shake":1,"vibrate":"500"},{"at":1.6,"target":"camera","zoom":3,"x":0,"y":0,"seconds":1.2,"ease":"out"},{"at":5,"target":"camera","reset":true},{"target":"footL,footR","exit":"fade"},{"target":"me","mood":"dizzy"}],"loop":false}, { t: b[i].t || Date.now() }); localStorage.setItem(STAGE_KEY, JSON.stringify(b)); } } catch (e) {} })();
 /* taps on pieces she made tappable come back to her */
 function stagePiecePx(e, now) {
   const K = camOf(e.depth), [px, py] = camPt(e.x * innerWidth / 100, e.y * innerHeight / 100, K);

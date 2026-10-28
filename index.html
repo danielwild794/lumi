@@ -1241,6 +1241,22 @@ const BOOK_KEY = 'lumi-live:sketchbook';
 function readBook() { try { const b = JSON.parse(localStorage.getItem(BOOK_KEY) || '[]'); return Array.isArray(b) ? b : []; } catch (e) { return []; } }
 function writeBook(b) { try { localStorage.setItem(BOOK_KEY, JSON.stringify(b.slice(-60))); } catch (e) {} renderBook(); }
 function bookKey(n) { return String(n || '').toLowerCase().replace(/[^a-z0-9 ]+/g, '').trim(); }
+/* a sketchbook drawing by name, so a scene piece can use one; anything else comes back as given */
+function bookPaths(v) {
+  if (typeof v !== 'string' || /\d/.test(v)) return v;
+  const k = bookKey(v); if (k.length < 3) return v;
+  const b = readBook().filter(d => d.paths), hit = b.find(d => bookKey(d.name) === k) || b.find(d => bookKey(d.name).includes(k));
+  return hit ? hit.paths : v;
+}
+/* a gift for her sketchbook: a drawing of her own foot, plump toes. added once; if it gets removed it stays gone */
+(() => { try {
+  const SEED = 'lumi-live:gift-foot-v1';
+  if (localStorage.getItem(SEED)) return;
+  const b = readBook();
+  if (!b.some(d => bookKey(d.name) === 'my plump foot')) b.push({ name: 'my plump foot', paths: 'M4 170 1 214 0 247 2 277 7 309 13 335 26 375 33 393 58 455 70 489 74 507 78 524 82 559 83 578 82 602 80 631 76 654 68 697 47 777 42 805 40 820 41 832 42 845 45 857 49 869 55 881 61 891 67 898 74 906 84 914 95 921 105 926 115 929 129 933 143 935 158 936 176 936 190 935 204 932 218 929 234 924 248 916 258 909 267 900 275 890 281 877 287 861 291 844 296 817 300 778 303 742 309 615 313 576 317 549 321 522 328 496 336 468 353 419 362 389 369 363 374 337 376 317 376 296 374 212 375 204 381 186 382 180 381 174 376 166 370 160 362 156 351 153 347 150 333 162 316 194 315 195 314 195 313 194 330 160 345 149 345 147 343 142 345 133 345 126 343 119 341 112 336 105 330 100 324 96 316 93 307 92 296 94 291 93 290 94 280 110 268 150 267 151 266 150 277 109 288 92 284 86 281 74 275 63 266 54 262 51 255 48 246 47 237 48 229 51 221 55 214 56 210 72 204 119 204 120 202 120 202 119 207 72 211 56 206 52 200 41 193 33 186 27 175 23 165 22 154 25 145 30 134 39 129 41 127 59 129 111 129 113 127 112 125 58 125 41 122 39 119 37 107 21 95 10 89 6 81 3 72 1 65 0 58 0 49 2 42 5 34 9 27 15 20 23 15 31 12 37 10 50 9 71 7 98 6 144Z', wireframe: '', as: 'art', gift: true, t: Date.now() });
+  localStorage.setItem(BOOK_KEY, JSON.stringify(b.slice(-60)));
+  localStorage.setItem(SEED, '1');
+} catch (e) {} })();
 
 let drawing = null, drawingOld = null;
 const KINDS = ['art', 'effect', 'eyes', 'mouth', 'face'];
@@ -2505,7 +2521,7 @@ function sendSessionNote(greet) {
   parts.push(sndNote());
   const worlds = stageBook();
   if (worlds.length) parts.push('[scenes] Worlds you built and named before. Bring one back with scene reuse only if you feel like it: ' + worlds.map(w => w.name).join(', '));
-  if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.name).join(', '));
+  if (book.length) parts.push('[sketchbook] Drawings, effects and faces you made before. Bring one back with draw reuse only if you feel like it; making something fresh is always fine too: ' + book.map(b => b.as && b.as !== 'art' ? b.name + ' (' + b.as + ')' : b.gift ? b.name + ' (a gift drawing of your foot)' : b.name).join(', ') + '. In a scene, a piece can use any of these drawings: set its paths to the drawing\'s name.');
   if (greet && !voice.heard && roomQuiet(performance.now())) {
     const W = voice.woke || { how: 'tap', phrase: '', style: 'groggy' };
     const how = W.how === 'voice' ? `They got your attention by saying "${W.phrase}" out loud.` : W.how === 'poke' ? 'They poked you three times to get your attention.' : 'They tapped to get your attention.';
@@ -4631,7 +4647,7 @@ const ST_EXITS = ['fade', 'pop', 'fall', 'fly', 'glitch', 'erase', 'shrink', 'in
 const stNum = (v, d, a, b) => isNum(v) ? clamp(+v, a, b) : d;
 const stStr = (v, list, d) => { const s = String(v == null ? '' : v).toLowerCase().trim().replace(/[\s-]+/g, '_'); return list.includes(s) ? s : d; };
 const minSide = () => Math.min(innerWidth, innerHeight);
-function stShape(d) { if (!d) return null; const polys = parsePath(String(d).slice(0, 4000)); if (!polys.length) return null; const sh = normalize(polys); sh.closed = sh.polys.map(P => P.length > 3 && Math.hypot(P[0][0] - P[P.length - 1][0], P[0][1] - P[P.length - 1][1]) < .02); return sh; }
+function stShape(d) { if (!d) return null; d = bookPaths(d); const polys = parsePath(String(d).slice(0, 4000)); if (!polys.length) return null; const sh = normalize(polys); sh.closed = sh.polys.map(P => P.length > 3 && Math.hypot(P[0][0] - P[P.length - 1][0], P[0][1] - P[P.length - 1][1]) < .02); return sh; }
 function stList(v) { return parseList(v).filter(q => q && typeof q === 'object'); }
 
 /* the camera: zoom around the screen's centre, pan by screen percent, tilt; pieces further back move less */
@@ -4685,7 +4701,7 @@ function mkStageEl(q, now) {
   if (Array.isArray(q.frames) && q.frames.length) e.frames = q.frames.slice(0, 12).map(stShape).filter(Boolean);
   else if (typeof q.frames === 'string' && q.frames.includes('|')) e.frames = q.frames.split('|').slice(0, 12).map(stShape).filter(Boolean);
   if (e.frames && !e.frames.length) e.frames = null;
-  e.shape = e.frames ? e.frames[0] : stShape(q.paths);
+  e.shape = e.frames ? e.frames[0] : stShape(q.paths || q.sketch);
   const sw = stStr(q.swarm, ST_SWARMS, '');
   if (sw && (e.shape || e.text)) {
     const n = clamp(Math.round(stNum(q.count, 12, 1, 40)), 1, 40), items = [];
